@@ -7,7 +7,7 @@ import csv
 import torch
 from functools import wraps
 
-from online_training.trainers.util import get_best_metric, save_to_csv
+from online_training.agents.util import get_best_metric, save_to_csv
 
 def add_to_csv(key):
     def decorator(func):

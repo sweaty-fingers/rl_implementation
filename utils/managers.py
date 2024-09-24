@@ -41,7 +41,7 @@ class SingletonMeta(type):
         return cls._instances[cls]
 
 class ConfigManager(metaclass=SingletonMeta):
-    """스
+    """
     실행 과정에서 단일 config 공유를 위한 singleton 클래스
     """
     def __init__(self, config_path):
@@ -53,7 +53,7 @@ class ConfigManager(metaclass=SingletonMeta):
         if not os.path.exists(config_path):
             print(f"{config_path} 가 존재하지 않습니다.\n")
             py_path = change_file_extension(config_path, "py")
-            if not os.path.exists(py_path)
+            if not os.path.exists(py_path):
                 print(f"Config를 작성하기 위한 py 파일({py_path})이 존재하지 않습니다.")
                 return
             
@@ -109,18 +109,41 @@ class TensorBoardManager(metaclass=SingletonMeta):
     def get_writer(self):
         return self.writer
 
-def log_decorator(func):
+def config_decorator(func):
+    """
+    함수에 config 인자가 None 일 경우 singleton으로 정의된 config 전달
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs)
+        if kwargs["config"] is None:
+            if ConfigManager._instances.get(ConfigManager) is None:
+                raise ValueError("You should instantiate config")
+            
+            config_instance = ConfigManager._instances.get(ConfigManager)
+            config = config_instance.get_config()
+            kwargs["config"] = config
+        return func(*args, **kwargs)
+    return wrapper
+
+def logger_decorator(func):
+    """
+    함수에 전달된 logger가 None일 경우 singleton logger 전달.
+    """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if LoggerManager._instances.get(LoggerManager):
-            LoggerManager()
-        
-        logger_instance = LoggerManager._instances.get(LoggerManager)
-        if logger_instance:
-            logger = logger_instance.get_logger()
-            return func(*args, **kwargs, logger=logger)
-        else:
-            return func(*args, **kwargs, logger=None)
+        if kwargs["logger"] is None:
+            if LoggerManager._instances.get(LoggerManager) is None: # 정의되어있지 않을 경우 default logger 생성
+                LoggerManager()
+            
+            logger_instance = LoggerManager._instances.get(LoggerManager)
+            if logger_instance:
+                logger = logger_instance.get_logger()
+            else:
+                logger = None
+            
+            kwargs["logger"] = logger
+            
+        return func(*args, **kwargs)
     return wrapper
 
 def tensorboard_decorator(func):
@@ -131,9 +154,10 @@ def tensorboard_decorator(func):
         writer_instance = TensorBoardManager._instances.get(TensorBoardManager)
         if writer_instance:
             writer = writer_instance.get_writer()
-            return func(*args, **kwargs, tb_writer=writer)
         else:
-            return func(*args, **kwargs, tb_writer=None)
+            writer = None
+        kwargs["tb_writer"] = writer
+        return func(*args, **kwargs)
     return wrapper
 
 def update_tensorboard(func):
@@ -154,6 +178,7 @@ def update_tensorboard(func):
                     print(f"Unsupported data type: {type(value)} to add tensorboard scaler")
         return outputs
     return wrapper
+
 
 def test_configmanager():
     if len(sys.argv) < 2:

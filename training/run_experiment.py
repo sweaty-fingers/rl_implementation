@@ -29,19 +29,19 @@ def _setup_parser():
     parser.add_argument("--max_epochs", default=2, type=int, help='max_epochs')
     parser.add_argument('--seed', default=SEED, type=int, help='seed value')
     parser.add_argument(
-        "--env_class",
+        "--env",
         type=str,
         default="InvertPendulum",
-        help="String identifier for the model class relatvie to {training_mode}.networks.",
+        help="String identifier for environment.",
     )
     parser.add_argument(
-        "--network_class",
+        "--network",
         type=str,
         default="DistFCNN",
         help="String identifier for the model class relatvie to {training_mode}.networks.",
     )
     parser.add_argument(
-        "--trainer_class",
+        "--trainer",
         type=str,
         default="BaseOfflineTrainer",
         help="String identifier for the model class, relative to {training_mode}.trainers",
@@ -57,8 +57,8 @@ def _setup_parser():
     network_class_module, trainer_class_module = get_class_module_name(temp_args.training_mode)
 
     print("Data and model loaded ...")
-    model_class = import_class(f"{network_class_module}.{temp_args.model_class}")
-    trainer_class = import_class(f"{trainer_class_module}.{temp_args.trainer_class}")
+    model_class = import_class(f"{network_class_module}.{temp_args.network}")
+    trainer_class = import_class(f"{trainer_class_module}.{temp_args.trainer}")
     
     # Get model, and LitModel specific arguments
     model_group = parser.add_argument_group("Network Args")

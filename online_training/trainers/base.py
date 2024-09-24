@@ -16,7 +16,7 @@ from utils.managers import (
     tensorboard_decorator, 
     update_tensorboard
 )
-from online_training.trainers.decorators import (
+from online_training.agents.decorators import (
     add_to_csv, 
     update_metrics, 
     log_outputs, 
@@ -24,7 +24,7 @@ from online_training.trainers.decorators import (
     update_scheduler
 )
 
-from online_training.trainers.metrics import MetricsMeter
+from online_training.agents.metrics import MetricsMeter
 
 init(autoreset=True)
 
