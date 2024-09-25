@@ -62,10 +62,11 @@ class ConfigManager(metaclass=SingletonMeta):
             save_dict_to_json(cfg, config_path)
             
         with open(config_path, "r") as file:
-            self.config = json.load(file)
+            self._config = json.load(file)
 
-    def get_config(self) -> dict:
-        return self.config
+    @property
+    def config(self) -> dict:
+        return self._config
 
 class LoggerManager(metaclass=SingletonMeta):
     """
@@ -74,14 +75,14 @@ class LoggerManager(metaclass=SingletonMeta):
     def __init__(self, name='my_logger', level=logging.DEBUG):
         formatter = ColoredFormatter('%(asctime)s - %(levelname)s - %(message)s')
         
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(level)
+        self._logger = logging.getLogger(name)
+        self._logger.setLevel(level)
         # Creating and adding the console handler
         console_handler = logging.StreamHandler(sys.stdout)
         ## console_handler.setLevel(level)
         console_handler.setFormatter(formatter)
         console_handler.setLevel(logging.INFO)
-        self.logger.addHandler(console_handler)
+        self._logger.addHandler(console_handler)
 
         # Creating and adding the file handler
         file_debug_handler = logging.FileHandler(name + "_debug" + ".log")
@@ -92,11 +93,12 @@ class LoggerManager(metaclass=SingletonMeta):
         file_info_handler.setFormatter(formatter)
         file_info_handler.setLevel(logging.INFO)
 
-        self.logger.addHandler(file_debug_handler)
-        self.logger.addHandler(file_info_handler)
+        self._logger.addHandler(file_debug_handler)
+        self._logger.addHandler(file_info_handler)
 
-    def get_logger(self):
-        return self.logger
+    @property
+    def logger(self):
+        return self._logger
         
 # singleton_tensorboard
 class TensorBoardManager(metaclass=SingletonMeta):
@@ -104,10 +106,11 @@ class TensorBoardManager(metaclass=SingletonMeta):
     단일 tensorboard 공유를 위한 singleton 클래스
     """
     def __init__(self, log_dir='/mnt/data'):
-        self.writer = SummaryWriter(log_dir=log_dir)
-
-    def get_writer(self):
-        return self.writer
+        self._writer = SummaryWriter(log_dir=log_dir)
+    
+    @property
+    def writer(self):
+        return self._writer
 
 def config_decorator(func):
     """
@@ -121,8 +124,9 @@ def config_decorator(func):
                 raise ValueError("You should instantiate config")
             
             config_instance = ConfigManager._instances.get(ConfigManager)
-            config = config_instance.get_config()
+            config = config_instance.config
             kwargs["config"] = config
+            
         return func(*args, **kwargs)
     return wrapper
 

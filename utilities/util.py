@@ -87,3 +87,22 @@ def change_file_extension(filepath, new_extension):
     # 새로운 확장자를 추가하여 새로운 파일 경로 생성
     new_filepath = f"{base}.{new_extension.lstrip('.')}"
     return new_filepath
+
+def get_config(obj):
+    """
+    인스턴스를 받아서 json과 호환되는 애트리뷰트를 dictionary 형식으로 반환
+    """
+    json_compatible_types = (str, int, float, bool, list, dict, type(None))
+
+    def is_json_compatible(value):
+        # 중첩된 객체가 있을 경우 재귀적으로 처리
+        if isinstance(value, json_compatible_types):
+            return True
+        return False
+
+    def convert_value(value):
+        if isinstance(value, json_compatible_types):
+            return value
+        return None  # 변환할 수 없는 값은 None으로 처리
+
+    return {key: convert_value(value) for key, value in obj.__dict__.items() if is_json_compatible(value)}

@@ -10,21 +10,21 @@ class ReplayBuffer():
     """
     A simple FIFO experience replay buffer for SAC agents.
     """
-    def __init__(self, batch_size, device, env_info: dict, args: argparse.Namespace = None):
+    def __init__(self, batch_size, device, env_config: dict, args: argparse.Namespace = None):
         """
-        env_info (dict): experience 들의 차원과 같은 정보들이 들어있는 dictionary
+        env_config (dict): experience 들의 차원과 같은 정보들이 들어있는 dictionary
         """
         self.args = vars(args) if args is not None else {}
         self.buffer_size = args.get("buffer_size", BUFFER_SIZE)
         self.batch_size = batch_size
         self.device = device
-        self.env_info = env_info
+        self.env_config = env_config
 
         # Set memory
         self.ptr, self.size = 0, 0
-        self.states = np.zeros(combined_shape(self.buffer_size, self.env_info["dim/state"]), dtype=np.float32)
-        self.actions = np.zeros(combined_shape(self.buffer_size, self.env_info["dim/action"]), dtype=np.float32)
-        self.next_states = np.zeros(combined_shape(self.buffer_size, self.env_info["dim/state"]), dtype=np.float32)
+        self.states = np.zeros(combined_shape(self.buffer_size, self.env_config["state_dim"]), dtype=np.float32)
+        self.actions = np.zeros(combined_shape(self.buffer_size, self.env_config["action_dim"]), dtype=np.float32)
+        self.next_states = np.zeros(combined_shape(self.buffer_size, self.env_config["state_dim"]), dtype=np.float32)
         self.rewards = np.zeros(self.buffer_size, dtype=np.float32)
         self.dones = np.zeros(self.buffer_size, dtype=np.float32)
     

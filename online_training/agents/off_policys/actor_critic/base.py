@@ -28,9 +28,9 @@ class BaseAgent():
         self.args = vars(args) if args is not None else {}
         
         # Envs config
-        self.state_dim = self.config["env/state_dim"]
-        self.action_type = self.config["env/action_type"]
-        self.action_dim = self.config["env/action_dim"]
+        self.state_dim = self.config["env"]["state_dim"]
+        self.action_type = self.config["env"]["action_type"]
+        self.action_dim = self.config["env"]["action_dim"]
 
         # Rewards
         self.gamma = self.args.get("gamma", GAMMA)

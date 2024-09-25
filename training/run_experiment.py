@@ -3,10 +3,9 @@ import os, sys
 import glob
 import torch
 
-from training.util import import_class, get_class_module_name, setup_data_and_network_from_args, log_outputs
-from online_training.data.util import data_prepare_and_setup
-from utils.util import set_seed, create_directory, save_dict_to_json, remove_old_checkpoints
-from utils.managers import ConfigManager, TensorBoardManager, LoggerManager
+from training.util import import_class, get_class_module_name, setup_data_and_network_from_args, log_outputs, get_env
+from utilities.util import set_seed, create_directory, save_dict_to_json, remove_old_checkpoints, get_config
+from utilities.managers import ConfigManager, TensorBoardManager, LoggerManager
 from colorama import Fore, Style
 from datetime import datetime
 
@@ -41,12 +40,17 @@ def _setup_parser():
         help="String identifier for the model class relatvie to {training_mode}.networks.",
     )
     parser.add_argument(
-        "--trainer",
+        "--agent",
         type=str,
         default="BaseOfflineTrainer",
         help="String identifier for the model class, relative to {training_mode}.trainers",
     )
-
+    parser.add_argument(
+        "--buffer",
+        type=str,
+        default="ReplayBuffer",
+        help="Replay buffer for training"
+    )
     parser.add_argument(
         "--checkpoint", type=str, default=None, help="If passed, loads a model from the provided path."
     )
@@ -54,15 +58,19 @@ def _setup_parser():
     # 사용할 data, model 클래스를 임포트한 후 
     temp_args, _ = parser.parse_known_args()
 
-    network_class_module, trainer_class_module = get_class_module_name(temp_args.training_mode)
+    network_class_module, trainer_class_module, buffer_class_module = get_class_module_name(temp_args.training_mode)
 
     print("Data and model loaded ...")
+    buffer_class = import_class(f"{buffer_class_module}.{temp_args.buffer}")
     model_class = import_class(f"{network_class_module}.{temp_args.network}")
     trainer_class = import_class(f"{trainer_class_module}.{temp_args.trainer}")
-    
+
     # Get model, and LitModel specific arguments
     model_group = parser.add_argument_group("Network Args")
     model_class.add_to_argparse(model_group)
+
+    buffer_group = parser.add_argument_group("Buffer Args")
+    buffer_class.add_to_argparse(buffer_group)
 
     trainer_group = parser.add_argument_group("Trainer Args")
     trainer_class.add_to_argparse(trainer_group)
@@ -80,15 +88,15 @@ def main():
         args = parser.parse_args()
 
         set_seed(args.seed)
-
-        if args.checkpoint is not None: 
+        
+        # Checkpoint setting
+        if args.checkpoint is not None:
             experiment_log_dir = args.checkpoint
             args.config = os.path.join(experiment_log_dir, "configs", "config.json")
             config_manager = ConfigManager(args.config)
-            config = config_manager.get_config()
 
             try:
-                pattern = os.path.join(config["CHECKPOINTS"]["CKPT_DIRNAME"], "model_best*.pth")
+                pattern = os.path.join(config_manager.config["CHECKPOINTS"]["CKPT_DIRNAME"], "model_best*.pth")
                 ckpt_path = glob.glob(pattern)[0]
                 ckpt = torch.load(ckpt_path)
 
@@ -100,8 +108,7 @@ def main():
             
         else:
             config_manager = ConfigManager(args.config)
-            config = config_manager.get_config()
-            logs_save_dir = config["DIRS"]["ROOT"]["EXPERIMENT_DIRNAME"]
+            logs_save_dir = config_manager.config["DIRS"]["ROOT"]["EXPERIMENT_DIRNAME"]
             experiment_description = f"{args.env_class}/{args.trainer_class}/{args.model_class}"
 
             if args.max_epochs < 3:
@@ -124,20 +131,26 @@ def main():
             for _, dir in checkpoints.items():
                 create_directory(dir)
                 
-            config["CHECKPOINTS"] = checkpoints
-            config_manager.config = config
+            config_manager.config["CHECKPOINTS"] = checkpoints
+
+        # Logger & Tensorboard setting
+        log_path = os.path.join(experiment_log_dir, f"{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}")
+        logger_manager = LoggerManager(log_path)
 
         tensorboard_manager = TensorBoardManager(experiment_log_dir)
         writer = tensorboard_manager.get_writer()
-        
-        log_path = os.path.join(experiment_log_dir, f"{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}")
-        logger_manager = LoggerManager(log_path)
-        logger = logger_manager.get_logger()
-        
-        data, model = setup_data_and_network_from_args(args)
+
+        # Set up envs
+        env, env_config = get_env(env_name=args.env), {}
+        config_manager.config["env"] = env_config
+
+        # Set up agent & network 
+        agent, model = setup_data_and_network_from_args(args)
         data_prepare_and_setup(data)
         logger.debug("Data and model loaded ...")
         
+
+
         # trainer setting
         trainer_class = import_class(f"{args.trainer_class_module}.{args.trainer_class}")        
         trainer = trainer_class(model=model, args=args, checkpoint=ckpt)
