@@ -14,7 +14,7 @@ import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from functools import wraps
 from colorama import Fore, Style, init
-from utils.util import save_dict_to_json, get_attr_from_module, change_file_extension
+from utilities.util import save_dict_to_json, get_attr_from_module, change_file_extension
 
 
 # colorama 초기화
@@ -112,6 +112,7 @@ class TensorBoardManager(metaclass=SingletonMeta):
 def config_decorator(func):
     """
     함수에 config 인자가 None 일 경우 singleton으로 정의된 config 전달
+    None이 아닐 경우 전달된 config 사용
     """
     @wraps(func)
     def wrapper(*args, **kwargs)
@@ -128,6 +129,7 @@ def config_decorator(func):
 def logger_decorator(func):
     """
     함수에 전달된 logger가 None일 경우 singleton logger 전달.
+    None이 아닐 경우 전달된 logger 사용
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -147,16 +149,21 @@ def logger_decorator(func):
     return wrapper
 
 def tensorboard_decorator(func):
+    """
+    함수에 전달된 logger가 None일 경우 singleton logger 전달.
+    None이 아닐 경우 전달된 logger 사용
+    """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if TensorBoardManager._instances.get(TensorBoardManager):
-            TensorBoardManager()
-        writer_instance = TensorBoardManager._instances.get(TensorBoardManager)
-        if writer_instance:
-            writer = writer_instance.get_writer()
-        else:
-            writer = None
-        kwargs["tb_writer"] = writer
+        if kwargs["tb_writer"] is None:
+            if TensorBoardManager._instances.get(TensorBoardManager):
+                TensorBoardManager()
+            writer_instance = TensorBoardManager._instances.get(TensorBoardManager)
+            if writer_instance:
+                writer = writer_instance.get_writer()
+            else:
+                writer = None
+            kwargs["tb_writer"] = writer
         return func(*args, **kwargs)
     return wrapper
 

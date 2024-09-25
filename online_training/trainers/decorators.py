@@ -5,9 +5,10 @@ decorator 함수들 정의.
 import os
 import csv
 import torch
+import pandas as pd
 from functools import wraps
 
-from online_training.agents.util import get_best_metric, save_to_csv
+from online_training.trainers.metrics import get_best_metric
 
 def add_to_csv(key):
     def decorator(func):
@@ -57,7 +58,10 @@ def update_metrics(func):
         for key, value in outputs.items():
             if isinstance(value, torch.Tensor):
                 value = value.item()
-            self.metrics[key].update(value)
+            if self.is_eval:
+                self.episode_metrics_eval[key].update(value)
+            else:
+                self.episode_metrics[key].update(value)
         return outputs
     return wrapper
 
@@ -85,7 +89,7 @@ def save_checkpoint(func):
         return outputs
     return wrapper
 
-def save_result_csv(func):
+def save_dataframe_to_csv(func):
     @wraps(func)
     def wrapper(self, *args, **kwargs):
         outputs = func(self, *args, **kwargs)
@@ -110,3 +114,11 @@ def log_outputs(level):
             return outputs
         return wrapper
     return decorator    
+
+def save_df_to_csv(outputs: dict, save_dir, stage="test"):
+    """
+    학습 중 기록된 dictionary 형태의 metric을 csv로 저장.
+    """
+    outputs = pd.DataFrame([outputs.values()], columns=outputs.keys())
+    outputs.to_csv(os.path.join(save_dir, f"{stage}_output" + ".csv"))
+    return outputs

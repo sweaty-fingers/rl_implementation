@@ -1,15 +1,15 @@
 import numpy as np
 import scipy.signal
 
-def combined_shape(length, shape=None):
+def combined_shape(buffer_size, shape=None):
     """
     buffer를 위한 데이터 크기 반환.
     length: 버퍼의 크기
     shape: 개별 데이터의 shape
     """
     if shape is None:
-        return (length,)
-    return (length, shape) if np.isscalar(shape) else (length, *shape)
+        return (buffer_size,)
+    return (buffer_size, shape) if np.isscalar(shape) else (buffer_size, *shape)
 
 def discount_cumsum(x, discount):
     """

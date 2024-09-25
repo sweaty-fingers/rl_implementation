@@ -12,11 +12,11 @@ from colorama import Fore, Style, init
 from utils.util import remove_old_checkpoints, get_attr_from_module
 from utils.managers import (
     ConfigManager, 
-    log_decorator, 
+    logger_decorator, 
     tensorboard_decorator, 
     update_tensorboard
 )
-from online_training.agents.decorators import (
+from online_training.trainers.decorators import (
     add_to_csv, 
     update_metrics, 
     log_outputs, 
@@ -24,7 +24,7 @@ from online_training.agents.decorators import (
     update_scheduler
 )
 
-from online_training.agents.metrics import MetricsMeter
+from online_training.trainers.metrics import MetricsMeter
 
 init(autoreset=True)
 
@@ -48,7 +48,7 @@ class BaseTrainer():
     Trainer schema
     """
     @tensorboard_decorator
-    @log_decorator
+    @logger_decorator
     def __init__(self, args: argparse.Namespace = None, logger=None, checkpoint=None, tb_writer=None):
         config_manger = ConfigManager(args.config)
         self.config = config_manger.get_config()

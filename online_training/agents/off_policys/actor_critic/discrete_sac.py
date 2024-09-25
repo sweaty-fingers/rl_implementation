@@ -7,20 +7,10 @@ import numpy as np
 
 from copy import deepcopy
 from colorama import Fore, Style, init
-from utils.util import remove_old_checkpoints, get_attr_from_module
+from utils.util import get_attr_from_module
 from utils.torch_util import create_actor_distribution
 from utils.managers import (
-    ConfigManager, 
-    log_decorator, 
     tensorboard_decorator, 
-    update_tensorboard
-)
-from online_training.agents.decorators import (
-    save_metrics_to_csv, 
-    update_metrics, 
-    log_outputs, 
-    save_checkpoint,
-    update_scheduler
 )
 
 from online_training.agents.off_policys.actor_critic.base import BaseAgent
@@ -32,9 +22,6 @@ LR_POLICY = 1e-4
 LR_CRITIC = 1e-4
 
 CONFIG_IGNORE = []
-
-TEST_METRIC = "average_return"
-CRITERION = "max"
 
 ALPHA = 0.2
 GAMMA = 0.99
@@ -56,6 +43,8 @@ class DiscreteSACAgent(BaseAgent):
         self.target_critic_1, self.target_critic_2 = deepcopy(self.critic_1), deepcopy(self.critic_2)
         self.critic_tau = self.args.get("target_critic_tau", CRITIC_TAU)
 
+        self.add_network_graph_in_tb_writer()
+
         # Optimizers
         self.actor_optimizer, self.critic_1_optimizer, self.critic_2_optimizer = None, None, None
         optimizer_module = self.args.get("optimizer_module", OPTIMIZER_MODULE_NAME)
@@ -66,9 +55,6 @@ class DiscreteSACAgent(BaseAgent):
         self.lr_critic = self.args.get("lr_critic", LR_CRITIC)
         self.configure_optimizers()
 
-        # For training algos
-        self.gamma = self.args.get("gamma", GAMMA)
-        
         self.automatic_entropy_tuning = self.args.get("automatic_entropy_tuning", AUTOMATIC_ENTROPY_TUNING)
         if self.automatic_entropy_tuning:
             # we set the max possible entropy as the target entropy
@@ -83,6 +69,16 @@ class DiscreteSACAgent(BaseAgent):
             self.alpha = self.args.get("alpha", ALPHA)
             self.add_log(f"{Fore.GREEN}Not automatic entropy tunning{Style.RESET_ALL}", level="info")
             self.add_log(f"{Fore.GREEN}Constant alpha: {self.alpha}{Style.RESET_ALL}", level="info")
+
+    @tensorboard_decorator
+    def add_network_graph_in_tb_writer(self, tb_writer):
+        # Add model graphs in tensorboard
+        if tb_writer is not None:
+            self.add_log(f"{Fore.GREEN}Add Network graphs in tensorboard{Style.RESET_ALL}", level="info")
+            dummy = torch.randn(1, self.state_dim) # batch(1), state_dim
+            tb_writer.add_graph(self.actor, dummy)
+            tb_writer.add_graph(self.critic_1, dummy)
+            tb_writer.add_graph(self.critic_2, dummy)
 
     def configure_optimizers(self):
         """
@@ -123,7 +119,7 @@ class DiscreteSACAgent(BaseAgent):
         
         return action, (action_probabilities, log_action_probabilities), max_probability_action
     
-    def select_action(self, state, is_eval=False):
+    def sample_action(self, state, is_eval=False):
         if is_eval:
             with torch.no_grad():
                 *_, action = self.get_action_and_action_info(state)
@@ -194,7 +190,7 @@ class DiscreteSACAgent(BaseAgent):
         return alpha_loss
 
     def update(self, batch):
-        states, actions, rewards, next_states, dones = batch
+        states, actions, rewards, next_states, dones = batch["states"], batch["actions"], batch["rewards"], batch["next_states"], batch["dones"]
 
         # Update critic networks
         self.critic_1_optimizer.zero_grad()
@@ -206,7 +202,7 @@ class DiscreteSACAgent(BaseAgent):
         self.critic_1_optimizer.step()
         
         ## Update target critic networks
-        self.update_target_critic()
+        self.update_target_critics()
 
         # Update actor network
         self.actor_optimizer.zero_grad()
@@ -221,7 +217,7 @@ class DiscreteSACAgent(BaseAgent):
             self.alpha_optimizer.step()
             self.alpha = self.log_alpha.exp()
 
-    def update_target_critic(self):
+    def update_target_critics(self):
         soft_update(self.target_critic_1, self.critic_1, self.critic_tau)
         soft_update(self.target_critic_2, self.critic_2, self.critic_tau)
         
@@ -229,7 +225,6 @@ class DiscreteSACAgent(BaseAgent):
     def add_to_argparse(parser):
         parser = BaseAgent.add_to_argparse(parser)
         parser.add_argument("--alpha", type=float, default=ALPHA)
-        parser.add_argument("--gamma", type=float, default=GAMMA, help="Discount factor gamma of reward")
         parser.add_argument("--target_critic_tau", type=float, default=CRITIC_TAU, help="Coefficient moving avg for updating target critic network")
         parser.add_argument("--automatic_entropy_tuning", action='store_true', help="Set alpha learnable parameter")
         
@@ -237,6 +232,7 @@ class DiscreteSACAgent(BaseAgent):
         parser.set_defaults(optimizer=OPTIMIZER)
         parser.set_defaults(lr_policy=LR_POLICY)
         parser.set_defaults(lr_critic=LR_CRITIC)
+        parser.set_defaults(gamma=GAMMA)
             
         return parser
 
