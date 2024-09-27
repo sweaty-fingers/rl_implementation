@@ -1,27 +1,28 @@
 """ Discrete action space 에서의 sac trainer """
 
 import argparse
+import os
 import torch
 import torch.nn.functional as F
 import numpy as np
 
 from copy import deepcopy
-from colorama import Fore, Style, init
-from utils.util import get_attr_from_module
-from utils.torch_util import create_actor_distribution
-from utils.managers import (
-    tensorboard_decorator, 
-)
+from colorama import Fore, Style
+from utilities.util import get_attr_from_module, get_config
+from utilities.torch_util import create_actor_distribution
+from utilities.managers import tensorboard_decorator
+from training.setup import import_class
 
 from online_training.agents.off_policys.actor_critic.base import BaseAgent
 from online_training.agents.util import soft_update
+
+
+CONFIG_IGNORE = ["args"]
 
 OPTIMIZER_MODULE_NAME = "torch.optim"
 OPTIMIZER = "Adam"
 LR_POLICY = 1e-4
 LR_CRITIC = 1e-4
-
-CONFIG_IGNORE = []
 
 ALPHA = 0.2
 GAMMA = 0.99
@@ -67,8 +68,15 @@ class DiscreteSACAgent(BaseAgent):
             self.add_log(f"{Fore.GREEN}Trainable variable alpha: {self.alpha}{Style.RESET_ALL}", level="info")
         else:
             self.alpha = self.args.get("alpha", ALPHA)
+            self.alpha_optimizer = None
             self.add_log(f"{Fore.GREEN}Not automatic entropy tunning{Style.RESET_ALL}", level="info")
             self.add_log(f"{Fore.GREEN}Constant alpha: {self.alpha}{Style.RESET_ALL}", level="info")
+        
+        self._config = get_config(self, CONFIG_IGNORE)
+
+    @property
+    def config(self):
+        return self._config
 
     @tensorboard_decorator
     def add_network_graph_in_tb_writer(self, tb_writer):
@@ -220,6 +228,50 @@ class DiscreteSACAgent(BaseAgent):
     def update_target_critics(self):
         soft_update(self.target_critic_1, self.critic_1, self.critic_tau)
         soft_update(self.target_critic_2, self.critic_2, self.critic_tau)
+
+    @property
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "actor": self.actor.state_dict(),
+            "critic1": self.critic_1.state_dict(),
+            "critic2": self.critic_2.state_dict(),
+            "critic1_target": self.target_critic_1.state_dict(),
+            "critic2_target": self.target_critic_2.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_1_optimizer": self.critic_1_optimizer.state_dict(),
+            "critic_2_optimizer": self.critic_2_optimizer.state_dict(),
+            "sac_log_alpha": self.log_alpha,
+            "sac_log_alpha_optimizer": self.alpha_optimizer.state_dict(),
+            "global_step_number": self.global_step_num,
+            "global_episode_number": self.global_episode_num
+        }
+
+    def load_state_dict(self, ckpt=None):
+        if ckpt is not None:
+            super().load_state_dict()
+            self.actor.load_state_dict(ckpt["state_dict/actor"])
+            self.critic_1.load_state_dict(ckpt["state_dict/critic_1"])
+            self.critic_2.load_state_dict(ckpt["state_dict/critic_2"])
+            self.actor_optimizer.load_state_dict(ckpt["state_dict/actor_optimizer"])
+            self.critic_1_optimizer.load_state_dict(ckpt["state_dict/critic_1_optimizer"])
+            self.critic_2_optimizer.load_state_dict(ckpt["state_dict/critic_2_optimizer"])
+            if self.automatic_entropy_tuning:
+                self.log_alpha.load_state_dict(ckpt["state_dict/alpha"])
+                self.alpha = self.log_alpha.exp()
+                self.alpha_optimizer.load_state_dict(ckpt["state_dict/alpha_optimizer"])
+    
+    @staticmethod
+    def setup_networks(config: dict, args: argparse.Namespace = None):
+        actor_network_class = import_class(f"networks.policy.{config["networks"]["actor"]["class_name"]}")
+        actor = actor_network_class(config=config, args=args)
+
+        critic_1_network_class = import_class(f"networks.value.{config["networks"]["critic_1"]["class_name"]}")
+        critic_1 = critic_1_network_class(config=config, args=args)
+
+        critic_2_network_class = import_class(f"networks.value.{config["networks"]["critic_2"]["class_name"]}")
+        critic_2 = critic_2_network_class(config=config, args=args)
+
+        return {"actor": actor, "critic_1": critic_1, "critic_2": critic_2}
         
     @staticmethod
     def add_to_argparse(parser):
@@ -235,4 +287,4 @@ class DiscreteSACAgent(BaseAgent):
         parser.set_defaults(gamma=GAMMA)
             
         return parser
-
+    

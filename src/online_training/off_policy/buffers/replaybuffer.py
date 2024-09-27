@@ -2,31 +2,42 @@ import argparse
 import itertools
 import numpy as np
 import torch
-from online_training.buffers.util import combined_shape
 
+from typing import Optional
+from online_training.buffers.util import combined_shape
+from utilities.util import get_config
+
+CONFIG_IGNORE = ["args"]
 BUFFER_SIZE = 2000
 
 class ReplayBuffer():
     """
     A simple FIFO experience replay buffer for SAC agents.
     """
-    def __init__(self, batch_size, device, env_config: dict, args: argparse.Namespace = None):
+    def __init__(self, config: dict, args: argparse.Namespace = None):
         """
         env_config (dict): experience 들의 차원과 같은 정보들이 들어있는 dictionary
         """
         self.args = vars(args) if args is not None else {}
         self.buffer_size = args.get("buffer_size", BUFFER_SIZE)
-        self.batch_size = batch_size
-        self.device = device
-        self.env_config = env_config
+        self.batch_size = config["trainer"]["batch_size"]
+        self.device = config["trainer"]["device"]
+        self.state_dim = config["env"]["state_dim"]
+        self.action_dim = config["env"]["action_dim"]
 
+        self._config = get_config(self, CONFIG_IGNORE)
+        
         # Set memory
         self.ptr, self.size = 0, 0
-        self.states = np.zeros(combined_shape(self.buffer_size, self.env_config["state_dim"]), dtype=np.float32)
-        self.actions = np.zeros(combined_shape(self.buffer_size, self.env_config["action_dim"]), dtype=np.float32)
-        self.next_states = np.zeros(combined_shape(self.buffer_size, self.env_config["state_dim"]), dtype=np.float32)
+        self.states = np.zeros(combined_shape(self.buffer_size, self.state_dim), dtype=np.float32)
+        self.actions = np.zeros(combined_shape(self.buffer_size, self.action_dim), dtype=np.float32)
+        self.next_states = np.zeros(combined_shape(self.buffer_size, self.state_dim), dtype=np.float32)
         self.rewards = np.zeros(self.buffer_size, dtype=np.float32)
         self.dones = np.zeros(self.buffer_size, dtype=np.float32)
+
+    @property
+    def config(self):
+        return self._config
     
     def __len__(self):
         return self.size

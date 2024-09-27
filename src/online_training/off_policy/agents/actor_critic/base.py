@@ -1,12 +1,8 @@
 import argparse
 import numpy as np
-import torch
 
-from colorama import Fore, Style, init
 from typing import Optional
-from online_training.trainers.metrics import MetricsMeter
-
-from utils.managers import (
+from utilities.managers import (
     config_decorator,
     logger_decorator
 )
@@ -14,6 +10,7 @@ from utils.managers import (
 OPTIMIZER_MODULE_NAME = "torch.optim"
 LOSS_MODULE_NAME = "online_training.off_policys.actor_critic.losses"
 
+N_STEP_LEARNING = 1
 GAMMA = 0.99
 
 class BaseAgent():
@@ -23,17 +20,22 @@ class BaseAgent():
     @config_decorator
     @logger_decorator
     def __init__(self, args: Optional[argparse.Namespace] = None, config=None, logger=None):
-        self.config = config
         self.logger = logger
-        self.args = vars(args) if args is not None else {}
+        args = vars(args) if args is not None else {}
         
         # Envs config
-        self.state_dim = self.config["env"]["state_dim"]
-        self.action_type = self.config["env"]["action_type"]
-        self.action_dim = self.config["env"]["action_dim"]
+        self.state_dim = config["env"]["state_dim"]
+        self.action_type = config["env"]["action_type"]
+        self.action_dim = config["env"]["action_dim"]
 
+        self.checkpoint = config["checkpoint"]
+        
+        self.global_step_num = 0 # 전체 학습 step
+        self.global_episode_num = 0 # 진행된 전체 episode number
+        
         # Rewards
-        self.gamma = self.args.get("gamma", GAMMA)
+        self.n_step_learning = args.get("n_step_learning", N_STEP_LEARNING) # n_step td
+        self.gamma = args.get("gamma", GAMMA)
         
     def add_log(self, msg, level="debug"):
         """
@@ -47,6 +49,13 @@ class BaseAgent():
                 getattr(self.logger, level)(msg)
             else:
                 print(f"Log level should be in {log_levels}")
+    
+    @property
+    def state_dict(self):
+        pass
+
+    def load_state_dict(self, ckpt):
+        pass
                 
     @staticmethod
     def add_to_argparse(parser):
@@ -72,7 +81,14 @@ class BaseAgent():
             default=None,
             help="optimizer class from torch.optim",
         )
+
         parser.add_argument("--lr_policy", type=float, default=None)
         parser.add_argument("--lr_critic", type=float, default=None)
         parser.add_argument("--gamma", type=float, default=GAMMA, help="Discount factor gamma of reward")
+        parser.add_argument(
+            '--n_step_learning',
+            type=int,
+            default=N_STEP_LEARNING,
+            help="N_steps to get td error"
+        )
         return parser 

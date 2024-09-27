@@ -103,10 +103,10 @@ class MetricLog():
             raise ValueError(f"criterion should be in {POSSIBLE_CRITERION}\n Now get {self.criterion}")
 
         if self.criterion == "min":
-            self.best_value = np.inf
+            self.best_score = np.inf
             self.best_moving_avg = np.inf
         elif self.criterion == "max":
-            self.best_value = -np.inf
+            self.best_score = -np.inf
             self.best_moving_avg = -np.inf
 
     def reset(self):
@@ -132,8 +132,8 @@ class MetricLog():
         criterion: best metric의 기준 (min or max) 
         """
         if self.criterion == "min":
-            self.best_value = min(self.best_value, self.result_log[-1])
+            self.best_score = min(self.best_score, self.result_log[-1])
             self.best_moving_avg = min(self.best_moving_avg, self.moving_avg_log[-1])
         elif self.criterion == "max":
-            self.best_value = max(self.best_value, self.result_log[-1])
+            self.best_score = max(self.best_score, self.result_log[-1])
             self.best_moving_avg = max(self.best_moving_avg, self.moving_avg_log[-1])

@@ -3,9 +3,9 @@ import os, sys
 import glob
 import torch
 
-from training.util import import_class, get_class_module_name, setup_data_and_network_from_args, log_outputs, get_env
 from utilities.util import set_seed, create_directory, save_dict_to_json, remove_old_checkpoints, get_config
-from utilities.managers import ConfigManager, TensorBoardManager, LoggerManager
+from training.util import import_class, get_class_module_names, setup_data_and_network_from_args, log_outputs, get_env
+from training.setup import setup_experiment_log_dir, setup_logger, setup_tensorboard, setup_env, setup_networks_and_agent, setup_buffer
 from colorama import Fore, Style
 from datetime import datetime
 
@@ -24,25 +24,18 @@ def _setup_parser():
     #     default=False,
     #     help="If passed, uses the PyTorch Profiler to track computation, exported as a Chrome-style trace.",
     # )
-    parser.add_argument("--training_mode", default="online_training")
-    parser.add_argument("--max_epochs", default=2, type=int, help='max_epochs')
+    parser.add_argument("--training_mode", default="online_training.off_policy")
     parser.add_argument('--seed', default=SEED, type=int, help='seed value')
     parser.add_argument(
         "--env",
         type=str,
-        default="InvertPendulum",
+        default="",
         help="String identifier for environment.",
-    )
-    parser.add_argument(
-        "--network",
-        type=str,
-        default="DistFCNN",
-        help="String identifier for the model class relatvie to {training_mode}.networks.",
     )
     parser.add_argument(
         "--agent",
         type=str,
-        default="BaseOfflineTrainer",
+        default="",
         help="String identifier for the model class, relative to {training_mode}.trainers",
     )
     parser.add_argument(
@@ -58,19 +51,20 @@ def _setup_parser():
     # 사용할 data, model 클래스를 임포트한 후 
     temp_args, _ = parser.parse_known_args()
 
-    network_class_module, trainer_class_module, buffer_class_module = get_class_module_name(temp_args.training_mode)
+    buffer_class_module, agent_class_module, trainer_class_module = get_class_module_names(temp_args.training_mode)
 
     print("Data and model loaded ...")
     buffer_class = import_class(f"{buffer_class_module}.{temp_args.buffer}")
-    model_class = import_class(f"{network_class_module}.{temp_args.network}")
+    agent_class = import_class(f"{agent_class_module}.{temp_args.agent}")
     trainer_class = import_class(f"{trainer_class_module}.{temp_args.trainer}")
 
     # Get model, and LitModel specific arguments
-    model_group = parser.add_argument_group("Network Args")
-    model_class.add_to_argparse(model_group)
 
     buffer_group = parser.add_argument_group("Buffer Args")
     buffer_class.add_to_argparse(buffer_group)
+
+    agent_group = parser.add_argument_group("Agent Args")
+    agent_class.add_to_argparse(agent_group)
 
     trainer_group = parser.add_argument_group("Trainer Args")
     trainer_class.add_to_argparse(trainer_group)
@@ -81,79 +75,29 @@ def _setup_parser():
 
 def main():
     try: 
-        experiment_log_dir = None
-        ckpt = None
-
         parser = _setup_parser()
         args = parser.parse_args()
-
+        # experiment_log_dir setting
+        experiment_log_dir, config, args, ckpt = setup_experiment_log_dir(args)
         set_seed(args.seed)
-        
-        # Checkpoint setting
-        if args.checkpoint is not None:
-            experiment_log_dir = args.checkpoint
-            args.config = os.path.join(experiment_log_dir, "configs", "config.json")
-            config_manager = ConfigManager(args.config)
 
-            try:
-                pattern = os.path.join(config_manager.config["CHECKPOINTS"]["CKPT_DIRNAME"], "model_best*.pth")
-                ckpt_path = glob.glob(pattern)[0]
-                ckpt = torch.load(ckpt_path)
-
-            except FileExistsError as e:
-                    print(f"Error: no checkpoint directory found! {e}")
-
-            if args.max_epochs <= ckpt["epoch"] + 1:
-                raise ValueError(f"max_epochs should be larger than current epoch {ckpt['epoch']}")
-            
-        else:
-            config_manager = ConfigManager(args.config)
-            logs_save_dir = config_manager.config["DIRS"]["ROOT"]["EXPERIMENT_DIRNAME"]
-            experiment_description = f"{args.env_class}/{args.trainer_class}/{args.model_class}"
-
-            if args.max_epochs < 3:
-                experiment_log_dir = os.path.join(logs_save_dir, experiment_description, "test")
-            else:
-                i = 1
-                while True: 
-                    experiment_log_dir = os.path.join(logs_save_dir, experiment_description, f"run{i}")
-                
-                    if not os.path.exists(os.path.join(experiment_log_dir, "csv")):
-                        break
-                    i += 1
-                    
-            checkpoints = {}
-            checkpoints["ROOT_DIRNAME"] = experiment_log_dir
-            checkpoints["CONFIG_DIRNAME"] = os.path.join(experiment_log_dir, "configs")
-            checkpoints["CSV_DIRNAME"] = os.path.join(experiment_log_dir, "csv")
-            checkpoints["CKPT_DIRNAME"] = os.path.join(experiment_log_dir, "ckpt")
-
-            for _, dir in checkpoints.items():
-                create_directory(dir)
-                
-            config_manager.config["CHECKPOINTS"] = checkpoints
-
-        # Logger & Tensorboard setting
-        log_path = os.path.join(experiment_log_dir, f"{datetime.now().strftime('%d_%m_%Y_%H_%M_%S')}")
-        logger_manager = LoggerManager(log_path)
-
-        tensorboard_manager = TensorBoardManager(experiment_log_dir)
-        writer = tensorboard_manager.get_writer()
+        ## Logger & Tensorboard setting
+        logger = setup_logger(experiment_log_dir=experiment_log_dir)
+        writer = setup_tensorboard(experiment_log_dir=experiment_log_dir)
 
         # Set up envs
-        env, env_config = get_env(env_name=args.env), {}
-        config_manager.config["env"] = env_config
+        env = setup_env(config=config, args=args, ckpt=ckpt)
 
-        # Set up agent & network 
-        agent, model = setup_data_and_network_from_args(args)
-        data_prepare_and_setup(data)
+        # Set up buffer
+        buffer = setup_buffer(config=config, args=args, ckpt=ckpt)
+
+        # Set up networks
+        networks, agent = setup_networks_and_agent(config=config, args=args, ckpt=ckpt)
         logger.debug("Data and model loaded ...")
-        
-
 
         # trainer setting
-        trainer_class = import_class(f"{args.trainer_class_module}.{args.trainer_class}")        
-        trainer = trainer_class(model=model, args=args, checkpoint=ckpt)
+        trainer_class = import_class(f"{args.trainer_class_module}.{args.trainer_class}")
+        trainer = trainer_class(env=env, agent=agent, buffer=buffer, args=args, checkpoint=ckpt)
         
         if trainer.checkpoint is not None:
             trainer.load_state()

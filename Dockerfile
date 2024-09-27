@@ -85,6 +85,7 @@ ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/cuda/bin:$PATH
 
 ENV PYTHONPATH=/workspace
+ENV PYTHONPATH="/workspace/src:$PYTHONPATH"
 RUN echo "bindkey -v" >> /root/.zshrc
 
 # (Optional) Add your own Python scripts or other files here

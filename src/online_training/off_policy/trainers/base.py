@@ -28,12 +28,13 @@ from online_training.trainers.metrics import MetricsMeter
 
 init(autoreset=True)
 
+CONFIG_IGNORE = ["args"]
+
 OPTIMIZER_MODULE_NAME = "torch.optim"
 OPTIMIZER = "Adam"
 LR = 2e-5
 
 NO_PROGRESS = False
-CONFIG_IGNORE = ['training_device', 'data_config', 'lr', 'optimizer_class', 'loss_fn', 'scheduler']
 FUNC_KEYS = ["loss_fn", "optimizer_class"]
 TEST_METRIC = "loss"
 CRITERION = "min" 
