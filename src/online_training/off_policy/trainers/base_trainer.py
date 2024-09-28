@@ -1,25 +1,27 @@
 import argparse
+import csv
 import os
+import shutil
 import torch
 
 from utilities.managers import (
     config_decorator, 
-    logger_decorator, 
-    tensorboard_decorator
 )
 
-from online_training.trainers.metrics import MetricsMeter, MetricLogs
+from utilities.metrics import MetricsMeter, LogMetrics
 from utilities.agent_util import is_best
-from online_training.trainers.decorators import update_metrics
-from utilities.util import get_config
+from utilities.util import make_config, remove_old_checkpoints, save_dict_to_csv
+from utilities.logger_util import add_log
 
 CONFIG_IGNORE = ["args", "config"]
 
 MIN_STEPS_BEFORE_LEARNING = 200
 N_UPDATES_PER_LEARNING = 50
-N_EPISODE_PER_EVAL = 200
+EVAL_EVERY_N_STEPS = 200
+SAVE_EVERY_N_STEPS = 200
+UPDATE_EVERY_N_STEPS = 200
 MAX_TRAINING_STEP = 10000
-N_STEP_PER_SAVING = 1000
+SAVING = 1000
 RUN_EVAL_EPISODE = True
 BATCH_SIZE = 64
 ROLLING_WINDOW_SIZE = 100
@@ -32,10 +34,8 @@ class BaseTrainer():
     Agent와 Environment의 상호 작용, 학습을 담당하는 클래스
     """
     @config_decorator
-    @logger_decorator
-    def __init__(self, env, buffer, agent, args: argparse.Namespace = None, config=None, logger=None):
+    def __init__(self, env, buffer, agent, args: argparse.Namespace = None, config=None):
         self.config = config
-        self.logger = logger
         args = vars(args) if args is not None else {}
         self.env = env
         self.buffer = buffer
@@ -55,9 +55,9 @@ class BaseTrainer():
         
         # Metric setting
         self.rolling_window_size = args.get("rolling_window_size", ROLLING_WINDOW_SIZE)
-        self.episode_metrics = MetricsMeter() # episode 내부의 지표를 기록할 metric
-        self.log_metrics = MetricLogs(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
-        self.log_metrics_eval = MetricLogs(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
+        self.metrics = MetricsMeter() # 단일 episode 지표를 기록할 metric
+        self.log_metrics = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
+        self.log_metrics_eval = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
         self.log_metrics.add_metric_log("return", "max")
         self.log_metrics_eval.add_metric_log("return", "max")
 
@@ -70,11 +70,13 @@ class BaseTrainer():
         self.stage = "train"
         self.min_steps_before_learning = args.get("min_steps", MIN_STEPS_BEFORE_LEARNING)
         self.run_eval_episode = args.get("run_eval_episode", RUN_EVAL_EPISODE)
-        self.max_training_steps = args.get("max_training_step", MAX_TRAINING_STEP)
-        self.n_update_per_learning = args.get("n_updates_per_learning", N_UPDATES_PER_LEARNING)
-        self.n_step_per_eval = args.get("n_step_per_eval", N_STEP_PER_EVAL)
+        self.max_training_step = args.get("max_training_step", MAX_TRAINING_STEP)
+        self.n_updates_per_learning = args.get("n_updates_per_learning", N_UPDATES_PER_LEARNING)
+        self.update_every_n_steps = args.get("update_every_n_steps", UPDATE_EVERY_N_STEPS)
+        self.eval_every_n_steps = args.get("eval_every_n_steps", EVAL_EVERY_N_STEPS)
+        self.save_every_n_steps = args.get("save_every_n_steps", SAVE_EVERY_N_STEPS)
 
-        self._config = get_config(self, CONFIG_IGNORE)
+        self._config = make_config(self, CONFIG_IGNORE)
 
         # Rescent episode infos:
         self.state = None
@@ -110,31 +112,22 @@ class BaseTrainer():
         self.dones_in_episode = []
 
         # Metric
-        self.episode_metrics.reset_all()
-
-    def track_recent_episodes(self):
-        """Saves the data from the recent episodes"""
-        self.states_in_episode.append(self.state)
-        self.actions_in_episode.append(self.action)
-        self.rewards_in_episode.append(self.reward)
-        self.next_states_in_episode.append(self.next_state)
-        self.dones_in_episode.append(self.done)
+        self.metrics.reset_all()
     
-    def update_log_metrics(self):
-        key_mapping = {"reward": "return"}
-        for key, metric in self.episode_metrics:
-            if key in key_mapping.keys():
-                if self.is_eval:
-                    self.log_metrics_eval[key].update(metric.sum, n_repeat_for_eval=self.n_episode_per_eval)
-                else:
-                    self.log_metrics[key].update(metric.sum)
-            else:
-                if self.is_eval:
-                    self.log_metrics_eval[key].update(metric.sum, n_repeat_for_eval=self.n_episode_per_eval)
-                else:
-                    self.log_metrics[f"{key}/sum"].update(metric.sum)
+    def run_episodes(self):
+        """
+        episode 동작
+        """
+        while self.agent.global_step_num < self.max_training_step:
+            self.reset_env()
+            while not self.done:
+                outputs = self.run_step_in_episode()
+                self.update_metrics(outputs=outputs)
+                self.track_recent_episode()
+            
+            self.update_log_metrics()
+            self.agent.global_episode_num += 1
 
-    @update_metrics
     def run_step_in_episode(self):
         self.action = self.agent.sample_action(self.state, is_eval=self.is_eval)
 
@@ -142,7 +135,7 @@ class BaseTrainer():
         self.done = terminated or truncated
 
         if self.time_to_learn:
-            for _ in self.n_update_per_learning:
+            for _ in self.n_updates_per_learning:
                 self.agent.update(self.buffer.sample_batch())
 
         if not self.is_eval:
@@ -154,46 +147,91 @@ class BaseTrainer():
         self.steps_in_episode += 1
 
         return {"reward": self.reward}
+
+    def update_log_metrics(self):
+        key_mapping = {"reward": "return"}
+
+        if self.is_eval:
+            log_metrics = self.log_metrics_eval
+        else:
+            log_metrics = self.log_metrics
+
+        for key, metric in self.metrics.items():
+            if key in key_mapping:
+                log_metrics[key_mapping[key]].update(metric.sum, n_repeat_for_eval=self.eval_every_n_steps)
+            else:
+                log_metrics[key_mapping[key]].update(metric.sum, n_repeat_for_eval=self.eval_every_n_steps)
+
+    def update_metrics(self, outputs):
+        for key, value in outputs.items():
+            if isinstance(value, torch.Tensor):
+                value = value.item()
+            self.metrics[key].update(value)
+
+    def save_metrics_csvs(self):
+        csv_path = os.path.join(self.checkpoint["dirs"]["csv"], "metrics")
+        if self.is_eval:
+            metrics = self.log_metrics_eval
+            filepath = os.path.join(csv_path, "metrics_evl.csv")
+        else:
+            metrics = self.log_metrics_eval
+            filepath = os.path.join(csv_path, "metrics.csv")
+
+        save_dict_to_csv(metrics.recent_values_to_dict(), filepath=filepath)
+
+    def track_recent_episode(self):
+        """Saves the data from the recent episodes"""
+        self.states_in_episode.append(self.state)
+        self.actions_in_episode.append(self.action)
+        self.rewards_in_episode.append(self.reward)
+        self.next_states_in_episode.append(self.next_state)
+        self.dones_in_episode.append(self.done)
     
-    def run_episodes(self):
-        """
-        episode 동작
-        """
-        while self.agent.global_episode_num < self.max_episodes:
-            self.reset_env()
-            while not self.done:
-                self.run_step_in_episode()
-            
-            self.update_log_metrics()
-            self.agent.global_episode_num += 1
+    def save_checkpoint(self, state_dict, filename="ckpt", ext=".pth"):
+        ckpt_dir = self.checkpoint["dirs"]["ckpt"]
+        current_score = self.log_metrics[self.test_metric].moving_avg_log[-1]
+        best_score = self.log_metrics[self.test_metric].best_moving_avg
+        
+        if is_best(best_score, current_score) or ((self.agent.global_step_num) % self.save_every_n_steps == 0):
+            pattern = f"e{self.agent.global_episode_num}s{self.agent.global_step_num}m{self.test_metric}b{current_score:.2f}"
+            filepath = os.path.join(ckpt_dir, f"{filename}_{pattern}" + ext)
+            torch.save(state_dict, filepath)
+
+            # best_state는 model_best로 시작하는 checkpoint로 저장.
+            add_log(f"====> Save best model | {self.test_metric}:{best_score}\n", "debug")
+            remove_old_checkpoints(ckpt_dir, prefix="model_best", extension=ext)
+            shutil.copyfile(filepath, os.path.join(ckpt_dir, f'model_best_{pattern}{ext}'))
 
     @property
     def is_eval(self):
         """
         evaluation 단계 확인
         """
-        return (self.steps_in_episode % self.n_episode_per_eval == 0) and self.run_eval_episode
+        return (self.steps_in_episode % self.eval_every_n_steps == 0) and self.run_eval_episode
     
     @property
     def time_to_learn(self):
         """
         buffer_size가 batch_size 보다 큰지, 최소 buffer_size, n_step learning 체크.
         """
-        return self.check_enough_experiences_num_in_buffer() and self.check_minimum_step_before_training() and self.check_n_step_learning()
-
+        return self.check_enough_experiences_in_buffer and self.check_minimum_step_before_training and self.check_update_every_n_steps
+    
+    @property
     def check_minimum_step_before_training(self):
         """
         학습을 하기 전 채워야할 최소 buffer 사이즈 체크
         """
         return self.agent.global_step_num > self.min_steps_before_learning
     
-    def check_n_step_learning(self):
+    @property
+    def check_update_every_n_steps(self):
         """
         self.n_step_learning 에 한번씩 학습
         """
-        return self.agent.global_episode_num % self.agent.n_step_learning == 0
+        return self.agent.global_step_num % self.update_every_n_steps == 0
 
-    def check_enough_experiences_num_in_buffer(self):
+    @property
+    def check_enough_experiences_in_buffer(self):
         """
         버퍼 안에 충분한 수의 experience(>batch_size)가 있는지 확인
         """
@@ -217,7 +255,7 @@ class BaseTrainer():
             help="id(s) for GPU_VISIBLE_DEVICES(MPS or CUDA)",
         )
         parser.add_argument(
-            "--n_step_per_saving", type=int, default=N_STEP_PER_SAVING, help="number of step per saving checkpoint"
+            "--save_every_n_steps", type=int, default=SAVE_EVERY_N_STEPS, help="number of step per saving checkpoint"
         )
         parser.add_argument(
             "--rolling_window_size",
@@ -238,9 +276,15 @@ class BaseTrainer():
             help="Number of updates for learning"
         )
         parser.add_argument(
-            '--n_episode_per_eval',
+            '--update_every_n_steps',
             type=int,
-            default=N_EPISODE_PER_EVAL,
+            default=UPDATE_EVERY_N_STEPS,
+            help = "Update agent every n steps"
+        )
+        parser.add_argument(
+            '--eval_every_n_steps',
+            type=int,
+            default=EVAL_EVERY_N_STEPS,
             help="Number of episode per running eval"
         )
         parser.add_argument(
@@ -264,35 +308,3 @@ class BaseTrainer():
         )
 
         return parser
-    
-    def save_checkpoint(self, state_dict, filename="ckpt", ext=".pth"):
-        ckpt_dir = self.checkpoint["dirs"]["ckpt"]
-        current_score = self.log_metrics[self.test_metric].moving_avg_log[-1]
-        best_score = self.log_metrics[self.test_metric].best_moving_avg
-        pattern = f"e{self.agent.global_episode_num}s{self.agent.global_step_num}m{self.test_metric}b{current_score:.2f}"
-        
-        if is_best(best_score, current_score) or ((self.agent.global_step_num + 1) % self.n_episode_ == 0):
-            filepath = os.path.join(ckpt_dir, f"{filename}_{pattern}" + ext)
-            torch.save(state_dict, filepath)
-
-            self.add_log(f"====> Save best model | {self.test_metric}:{self.best_metric}\n", "debug")
-            remove_old_checkpoints(ckpt_dir, prefix="model_best", extension=ext)
-            shutil.copyfile(filepath, os.path.join(ckpt_dir, f'model_best_{pattern}{ext}'))
-            self.best_state = state
-
-
-def save_checkpoint(func):
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        state_dict = func(self, *args, **kwargs)
-        if is_best(self.best_score, self.metric) or ((self.current_epoch + 1) % self.epochs_per_save == 0):
-
-
-            self.agent.save_checkpoint(state, is_best=is_best)
-            
-        if is_best:
-            self.add_log(f"Best metric\n {self.stage}: {outputs}")
-        
-        return outputs
-    return wrapper
-    

@@ -71,8 +71,11 @@ def setup_experiment_log_dir(args: argparse.Namespace):
 
         for _, d in checkpoint_dirs.items():
             create_directory(d)
-        config["checkpoint"] = {}          
-        config["checkpoint"]["dirs"] = checkpoint_dirs
+
+        if config.get("checkpoint") is None:
+            config["checkpoint"] = {"dirs": checkpoint_dirs}
+        else:
+            config["checkpoint"]["dirs"] = checkpoint_dirs
 
     return experiment_log_dir, config, args, ckpt
 

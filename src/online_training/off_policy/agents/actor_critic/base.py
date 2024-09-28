@@ -4,7 +4,6 @@ import numpy as np
 from typing import Optional
 from utilities.managers import (
     config_decorator,
-    logger_decorator
 )
 
 OPTIMIZER_MODULE_NAME = "torch.optim"
@@ -18,9 +17,7 @@ class BaseAgent():
     Base actor-critic schema
     """
     @config_decorator
-    @logger_decorator
-    def __init__(self, args: Optional[argparse.Namespace] = None, config=None, logger=None):
-        self.logger = logger
+    def __init__(self, args: Optional[argparse.Namespace] = None, config=None):
         args = vars(args) if args is not None else {}
         
         # Envs config
@@ -34,21 +31,8 @@ class BaseAgent():
         self.global_episode_num = 0 # 진행된 전체 episode number
         
         # Rewards
-        self.n_step_learning = args.get("n_step_learning", N_STEP_LEARNING) # n_step td
+        self.n_step_learning = args.get("n_step_learning", N_STEP_LEARNING) # n_step td 아직 구현 ㅌ
         self.gamma = args.get("gamma", GAMMA)
-        
-    def add_log(self, msg, level="debug"):
-        """
-        log 메시지 추
-        """
-        log_levels = ["debug", "info", "warning", "error", "critical"]
-        if self.logger is None:
-            print(msg)
-        else:
-            if level in log_levels:
-                getattr(self.logger, level)(msg)
-            else:
-                print(f"Log level should be in {log_levels}")
     
     @property
     def state_dict(self):

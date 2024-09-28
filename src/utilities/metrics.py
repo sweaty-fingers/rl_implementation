@@ -57,7 +57,7 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-class MetricLogs():
+class LogMetrics():
     """
     AverageMeter 클래스를 default로 하는 dictionary를 담은 클래스.
     새로운 metric을 추가해도 딕셔너리처럼 새로운 key를 설정하여 추가하면 됨.
@@ -67,7 +67,7 @@ class MetricLogs():
         self._metrics = {}
     
     def __setitem__(self, key, value):
-        if isinstance(value, MetricLog):
+        if isinstance(value, LogMetric):
             raise TypeError("value must be instance of MetricLog")
         self._metrics[key] = value
     
@@ -75,7 +75,7 @@ class MetricLogs():
         return self._metrics[key]
     
     def add_metric_log(self, key, criterion):
-        self._metrics[key] = MetricLog(self.rolling_window_size, criterion)
+        self._metrics[key] = LogMetric(self.rolling_window_size, criterion)
 
     def items(self):
         for key, value in self._metrics.items():
@@ -92,7 +92,15 @@ class MetricLogs():
         for _, metric in self._metrics.items():
             metric.reset()
 
-class MetricLog():
+    def recent_values_to_dict(self):
+        di = {}
+        for key, metric in self.items():
+            di[{f"value/{key}"}] = metric.result_log[-1]
+            di[{f"avg/{key}"}] = metric.moving_avg_log[-1]
+
+        return di
+
+class LogMetric():
     def __init__(self, rolling_window_size, criterion):
         self.rolling_window_size = rolling_window_size
         self.criterion = criterion

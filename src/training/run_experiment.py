@@ -3,8 +3,9 @@ import os, sys
 import glob
 import torch
 
-from utilities.util import set_seed, create_directory, save_dict_to_json, remove_old_checkpoints, get_config
-from training.util import import_class, get_class_module_names, setup_data_and_network_from_args, log_outputs, get_env
+from utilities.util import set_seed, save_dict_to_json, remove_old_checkpoints
+from utilities.logger_util import set_log_level
+from training.util import import_class, get_class_module_names, log_outputs
 from training.setup import setup_experiment_log_dir, setup_logger, setup_tensorboard, setup_env, setup_networks_and_agent, setup_buffer
 from colorama import Fore, Style
 from datetime import datetime
@@ -25,6 +26,7 @@ def _setup_parser():
     #     help="If passed, uses the PyTorch Profiler to track computation, exported as a Chrome-style trace.",
     # )
     parser.add_argument("--training_mode", default="online_training.off_policy")
+    parser.add_argument("--print_log_level", type=str, default="info", help="Logger level for printing cli")
     parser.add_argument('--seed', default=SEED, type=int, help='seed value')
     parser.add_argument(
         "--env",
@@ -83,6 +85,7 @@ def main():
 
         ## Logger & Tensorboard setting
         logger = setup_logger(experiment_log_dir=experiment_log_dir)
+        set_log_level(args.pring_log_leval)
         writer = setup_tensorboard(experiment_log_dir=experiment_log_dir)
 
         # Set up envs
@@ -102,12 +105,16 @@ def main():
         if trainer.checkpoint is not None:
             trainer.load_state()
 
-        config["DATA_ATTRS"] = data.get_attrs()
-        config["MODEL_ATTRS"] = model.get_attrs()
-        config["TRAINER_ATTRS"] = trainer.get_attrs()
+        config["buffer"] = buffer.config
+        networks_config = {}
+        for key, network in networks.items():
+            networks_config[key] = network.config
+        config["networks"] = networks_config
+        config["agent"] = agent.config
+        config["trainer"] = trainer.config
         
-        remove_old_checkpoints(config["CHECKPOINTS"]["CONFIG_DIRNAME"], prefix="config", extension=".json")
-        save_dict_to_json(config, os.path.join(config["CHECKPOINTS"]["CONFIG_DIRNAME"], "config.json"), readonly=True)
+        remove_old_checkpoints(config["checkpoint"]["dirs"]["config"], prefix="config", extension=".json")
+        save_dict_to_json(config, os.path.join(config["checkpoint"]["dirs"]["config"], "config.json"), readonly=True)
 
         logger.debug("set_up trainer...")
         

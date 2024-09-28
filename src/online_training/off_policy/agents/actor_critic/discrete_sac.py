@@ -11,6 +11,7 @@ from colorama import Fore, Style
 from utilities.util import get_attr_from_module, get_config
 from utilities.torch_util import create_actor_distribution
 from utilities.managers import tensorboard_decorator
+from utilities.logger_util import add_log
 from training.setup import import_class
 
 from online_training.agents.off_policys.actor_critic.base import BaseAgent
@@ -64,13 +65,13 @@ class DiscreteSACAgent(BaseAgent):
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha = self.log_alpha.exp()
             self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.lr_policy, eps=1e-4)
-            self.add_log(f"{Fore.GREEN}Set automatic entropy tunning{Style.RESET_ALL}", level="info")
-            self.add_log(f"{Fore.GREEN}Trainable variable alpha: {self.alpha}{Style.RESET_ALL}", level="info")
+            add_log(f"{Fore.GREEN}Set automatic entropy tunning{Style.RESET_ALL}", level="info")
+            add_log(f"{Fore.GREEN}Trainable variable alpha: {self.alpha}{Style.RESET_ALL}", level="info")
         else:
             self.alpha = self.args.get("alpha", ALPHA)
             self.alpha_optimizer = None
-            self.add_log(f"{Fore.GREEN}Not automatic entropy tunning{Style.RESET_ALL}", level="info")
-            self.add_log(f"{Fore.GREEN}Constant alpha: {self.alpha}{Style.RESET_ALL}", level="info")
+            add_log(f"{Fore.GREEN}Not automatic entropy tunning{Style.RESET_ALL}", level="info")
+            add_log(f"{Fore.GREEN}Constant alpha: {self.alpha}{Style.RESET_ALL}", level="info")
         
         self._config = get_config(self, CONFIG_IGNORE)
 
@@ -82,7 +83,7 @@ class DiscreteSACAgent(BaseAgent):
     def add_network_graph_in_tb_writer(self, tb_writer):
         # Add model graphs in tensorboard
         if tb_writer is not None:
-            self.add_log(f"{Fore.GREEN}Add Network graphs in tensorboard{Style.RESET_ALL}", level="info")
+            add_log(f"{Fore.GREEN}Add Network graphs in tensorboard{Style.RESET_ALL}", level="info")
             dummy = torch.randn(1, self.state_dim) # batch(1), state_dim
             tb_writer.add_graph(self.actor, dummy)
             tb_writer.add_graph(self.critic_1, dummy)
@@ -96,10 +97,10 @@ class DiscreteSACAgent(BaseAgent):
         self.critic_1_optimizer = self.optimizer_class(self.critic_1.parameters(), lr=self.lr_critic)
         self.critic_2_optimizer = self.optimizer_class(self.critic_2.parameters(), lr=self.lr_critic)
 
-        self.add_log(f"{Fore.GREEN}==> Configure optimizer{Style.RESET_ALL}", "info")
-        self.add_log(f"{Fore.GREEN}Actor optimizer: {self.actor_optimizer.__class__}{Style.RESET_ALL}", "info")
-        self.add_log(f"{Fore.GREEN}Critic_1 optimizer: {self.critic_1_optimizer.__class__}{Style.RESET_ALL}", "info")
-        self.add_log(f"{Fore.GREEN}Critic_2 optimizer: {self.critic_2_optimizer.__class__}{Style.RESET_ALL}", "info")
+        add_log(f"{Fore.GREEN}==> Configure optimizer{Style.RESET_ALL}", "info")
+        add_log(f"{Fore.GREEN}Actor optimizer: {self.actor_optimizer.__class__}{Style.RESET_ALL}", "info")
+        add_log(f"{Fore.GREEN}Critic_1 optimizer: {self.critic_1_optimizer.__class__}{Style.RESET_ALL}", "info")
+        add_log(f"{Fore.GREEN}Critic_2 optimizer: {self.critic_2_optimizer.__class__}{Style.RESET_ALL}", "info")
 
         return {"optimizer/actor": self.actor_optimizer, "optimizer/critic_1": self.critic_1_optimizer, "optimizer/critic_2": self.critic_2_optimizer}
 

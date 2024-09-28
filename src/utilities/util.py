@@ -1,4 +1,5 @@
 import glob
+import csv
 import importlib
 import os
 import random
@@ -88,7 +89,7 @@ def change_file_extension(filepath, new_extension):
     new_filepath = f"{base}.{new_extension.lstrip('.')}"
     return new_filepath
 
-def get_config(obj, ignore):
+def make_config(obj, ignore):
     """
     인스턴스를 받아서 json과 호환되는 애트리뷰트를 dictionary 형식으로 반환
     """
@@ -101,3 +102,19 @@ def get_config(obj, ignore):
         return False
 
     return {key: value for key, value in obj.__dict__.items() if is_json_compatible(value) and key not in ignore}
+
+def save_dict_to_csv(outputs:dict, filepath):
+    
+    # CSV 파일이 있는지 확인
+    file_exists = os.path.isfile(filepath)
+    
+    # CSV 파일에 데이터 추가
+    with open(filepath, 'a', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=outputs.keys())
+        
+        # 파일이 없으면 컬럼 헤더 추가
+        if not file_exists:
+            writer.writeheader()
+        
+        # 새로운 데이터 추가
+        writer.writerow(outputs)
