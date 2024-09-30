@@ -118,3 +118,12 @@ def save_dict_to_csv(outputs:dict, filepath):
         
         # 새로운 데이터 추가
         writer.writerow(outputs)
+
+def find_files(base_dir, pattern, file_extension):
+    matched_files = []
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if pattern in file and file.endswith(file_extension):
+                matched_files.append(os.path.join(root, file))
+    
+    return matched_files

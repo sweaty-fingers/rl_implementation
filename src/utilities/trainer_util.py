@@ -5,5 +5,5 @@ def is_best(best, compare, criterion: str):
     
     if criterion == "min":
         return compare < best
-    else
+    else:
         return compare > best

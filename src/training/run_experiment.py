@@ -5,8 +5,7 @@ import torch
 
 from utilities.util import set_seed, save_dict_to_json, remove_old_checkpoints
 from utilities.logger_util import set_log_level
-from training.util import import_class, get_class_module_names, log_outputs
-from training.setup import setup_experiment_log_dir, setup_logger, setup_tensorboard, setup_env, setup_networks_and_agent, setup_buffer
+from training.setup import setup_experiment_log_dir, setup_logger, setup_tensorboard, setup_env, setup_networks_and_agent, setup_buffer, import_class, get_class_module_names
 from colorama import Fore, Style
 from datetime import datetime
 
@@ -28,17 +27,18 @@ def _setup_parser():
     parser.add_argument("--training_mode", default="online_training.off_policy")
     parser.add_argument("--print_log_level", type=str, default="info", help="Logger level for printing cli")
     parser.add_argument('--seed', default=SEED, type=int, help='seed value')
+    parser.add_argument('--config', default=None, type=str, help="Path of config file to run experiment")
     parser.add_argument(
         "--env",
         type=str,
-        default="",
+        default="CartPole-v1",
         help="String identifier for environment.",
     )
     parser.add_argument(
         "--agent",
         type=str,
-        default="",
-        help="String identifier for the model class, relative to {training_mode}.trainers",
+        default="DiscreteSACAgent",
+        help="String identifier for the model class, relative to {training_mode}.agents",
     )
     parser.add_argument(
         "--buffer",
@@ -47,13 +47,19 @@ def _setup_parser():
         help="Replay buffer for training"
     )
     parser.add_argument(
+        "--trainer",
+        type=str,
+        default="BaseTrainer",
+        help="String identifier for the trainer class, relative to {training_mode}.trainers"
+    )
+    parser.add_argument(
         "--checkpoint", type=str, default=None, help="If passed, loads a model from the provided path."
     )
 
     # 사용할 data, model 클래스를 임포트한 후 
     temp_args, _ = parser.parse_known_args()
 
-    buffer_class_module, agent_class_module, trainer_class_module = get_class_module_names(temp_args.training_mode)
+    buffer_class_module, agent_class_module, trainer_class_module = get_class_module_names(temp_args)
 
     print("Data and model loaded ...")
     buffer_class = import_class(f"{buffer_class_module}.{temp_args.buffer}")

@@ -9,7 +9,7 @@ from utilities.managers import (
 )
 
 from utilities.metrics import MetricsMeter, LogMetrics
-from utilities.agent_util import is_best
+from utilities.trainer_util import is_best
 from utilities.util import make_config, remove_old_checkpoints, save_dict_to_csv
 from utilities.logger_util import add_log
 

@@ -118,7 +118,7 @@ def config_decorator(func):
     None이 아닐 경우 전달된 config 사용
     """
     @wraps(func)
-    def wrapper(*args, **kwargs)
+    def wrapper(*args, **kwargs):
         if kwargs["config"] is None:
             if ConfigManager._instances.get(ConfigManager) is None:
                 raise ValueError("You should instantiate config")

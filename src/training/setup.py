@@ -156,7 +156,7 @@ def get_class_module_names(args: argparse.Namespace):
 
 def get_agent_class_module(args: argparse.Namespace):
     agent_category = get_agent_category(args)
-    return f"{args.training_mode}.{agent_category}.agents"
+    return f"{args.training_mode}.agents.{agent_category}"
 
 def get_agent_category(args: argparse.Namespace):
     """
@@ -170,10 +170,10 @@ def get_agent_category(args: argparse.Namespace):
             if keyward.lower() in args.agent.lower():
                 return category
 
-def get_buffer_class_module(args):
+def get_buffer_class_module(args: argparse.Namespace):
     return f"{args.training_mode}.buffers"
 
-def get_trainer_class_module(args):
+def get_trainer_class_module(args: argparse.Namespace):
     return f"{args.training_mode}.trainers"
          
 

@@ -6,16 +6,17 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from typing import Any
 from copy import deepcopy
 from colorama import Fore, Style
-from utilities.util import get_attr_from_module, get_config
+from utilities.util import get_attr_from_module, make_config
 from utilities.torch_util import create_actor_distribution
 from utilities.managers import tensorboard_decorator
 from utilities.logger_util import add_log
 from training.setup import import_class
 
-from online_training.agents.off_policys.actor_critic.base import BaseAgent
-from online_training.agents.util import soft_update
+from online_training.off_policy.agents.actor_critic.base import BaseAgent
+from utilities.agent_util import soft_update
 
 
 CONFIG_IGNORE = ["args"]
@@ -73,14 +74,14 @@ class DiscreteSACAgent(BaseAgent):
             add_log(f"{Fore.GREEN}Not automatic entropy tunning{Style.RESET_ALL}", level="info")
             add_log(f"{Fore.GREEN}Constant alpha: {self.alpha}{Style.RESET_ALL}", level="info")
         
-        self._config = get_config(self, CONFIG_IGNORE)
+        self._config = make_config(self, CONFIG_IGNORE)
 
     @property
     def config(self):
         return self._config
 
     @tensorboard_decorator
-    def add_network_graph_in_tb_writer(self, tb_writer):
+    def add_network_graph_in_tb_writer(self, tb_writer=None):
         # Add model graphs in tensorboard
         if tb_writer is not None:
             add_log(f"{Fore.GREEN}Add Network graphs in tensorboard{Style.RESET_ALL}", level="info")
@@ -149,11 +150,7 @@ class DiscreteSACAgent(BaseAgent):
                     next_states: torch.Tensor, 
                     dones: torch.Tensor):
         """
-        diecrete action space에서의 critic_loss (q_loss):
-        $$
-        Q^{\pi}(s,a) &= \underE{s' \sim P \\ a' \sim \pi}{R(s,a,s') + \gamma\left(Q^{\pi}(s',a') + \alpha H\left(\pi(\cdot|s')\right) \right)} \\
-        &= \underE{s' \sim P \\ a' \sim \pi}{R(s,a,s') + \gamma\left(Q^{\pi}(s',a') - \alpha \log \pi(a'|s') \right)}
-        $$
+        diecrete action space에서의 critic_loss (q_loss)
         """
         with torch.no_grad():
             # target network는 gradient에 포함 x
@@ -177,10 +174,6 @@ class DiscreteSACAgent(BaseAgent):
         ):
         """
         Discrete action space에서의 policy loss
-        $$
-        V^{\pi}(s) &= \underE{a \sim \pi}{Q^{\pi}(s,a)} + \alpha H\left(\pi(\cdot|s)\right) \\
-        &= \underE{a \sim \pi}{Q^{\pi}(s,a) - \alpha \log \pi(a|s)}.
-        $$
         """
         action, (action_probabilities, log_action_probabilities), _ = self.get_action_and_action_info(states)
         qf1_pi = self.critic_1(states)
@@ -263,13 +256,13 @@ class DiscreteSACAgent(BaseAgent):
     
     @staticmethod
     def setup_networks(config: dict, args: argparse.Namespace = None):
-        actor_network_class = import_class(f"networks.policy.{config["networks"]["actor"]["class_name"]}")
+        actor_network_class = import_class(f"networks.policy.{config['networks']['actor']['class_name']}")
         actor = actor_network_class(config=config, args=args)
 
-        critic_1_network_class = import_class(f"networks.value.{config["networks"]["critic_1"]["class_name"]}")
+        critic_1_network_class = import_class(f"networks.value.{config['networks']['critic_1']['class_name']}")
         critic_1 = critic_1_network_class(config=config, args=args)
 
-        critic_2_network_class = import_class(f"networks.value.{config["networks"]["critic_2"]["class_name"]}")
+        critic_2_network_class = import_class(f"networks.value.{config['networks']['critic_2']['class_name']}")
         critic_2 = critic_2_network_class(config=config, args=args)
 
         return {"actor": actor, "critic_1": critic_1, "critic_2": critic_2}

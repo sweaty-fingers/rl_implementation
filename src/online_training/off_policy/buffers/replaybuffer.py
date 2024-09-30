@@ -4,8 +4,8 @@ import numpy as np
 import torch
 
 from typing import Optional
-from online_training.buffers.util import combined_shape
-from utilities.util import get_config
+from utilities.buffer_util import combined_shape
+from utilities.util import make_config
 
 CONFIG_IGNORE = ["args"]
 BUFFER_SIZE = 2000
@@ -25,7 +25,7 @@ class ReplayBuffer():
         self.state_dim = config["env"]["state_dim"]
         self.action_dim = config["env"]["action_dim"]
 
-        self._config = get_config(self, CONFIG_IGNORE)
+        self._config = make_config(self, CONFIG_IGNORE)
         
         # Set memory
         self.ptr, self.size = 0, 0
