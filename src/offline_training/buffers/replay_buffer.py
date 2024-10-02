@@ -42,6 +42,7 @@ class ReplayBuffer:
 
     def get_init_param_from_config(self, config: dict):
         kwargs = {}
+        kwargs["buffer_size"] = config.get("buffer").get("buffer_size")
         kwargs["_batch_size"] = config.get("trainer").get("batch_size")
         kwargs["_state_dim"] = config.get("env").get("state_dim")
         kwargs["_action_dim"] = config.get("env").get("action_dim")
@@ -95,15 +96,11 @@ class ReplayBuffer:
         self.reset_buffer()
         if self._size != 0:
             raise ValueError("Trying to load data into non-empty replay buffer")
-        
-        __file__
-        
+         
         
         n_transitions = data["observations"].shape[0]
         if n_transitions > self._buffer_size:
             raise ValueError(
-              
-        
         
         return 
 

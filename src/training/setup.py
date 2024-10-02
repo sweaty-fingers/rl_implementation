@@ -3,7 +3,7 @@ import glob
 import importlib
 import os
 
-import gymansium_tutorials as gym
+import gymnasium as gym
 import torch
 
 from datetime import datetime
