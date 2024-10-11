@@ -3,7 +3,7 @@ import os, sys
 import glob
 import torch
 
-from utilities.util import set_seed, save_dict_to_json, remove_old_checkpoints
+from utilities.util import set_seed, set_device, save_dict_to_json, remove_old_checkpoints
 from utilities.logger_util import set_log_level
 from training.setup import setup_experiment_log_dir, setup_logger, setup_tensorboard, setup_env, setup_networks_and_agent, setup_buffer, import_class, get_class_module_names
 from colorama import Fore, Style
@@ -29,6 +29,15 @@ def _setup_parser():
     parser.add_argument('--seed', default=SEED, type=int, help='seed value')
     parser.add_argument('--config', default=None, type=str, help="Path of config file to run experiment")
     parser.add_argument(
+            "--gpus",
+            default=None,
+            type=int,
+            help="id(s) for GPU_VISIBLE_DEVICES(MPS or CUDA)",
+        )
+    parser.add_argument(
+        "--max_steps", type=int, default=1, help="Max steps to update agent"
+    )
+    parser.add_argument(
         "--env",
         type=str,
         default="CartPole-v1",
@@ -44,6 +53,12 @@ def _setup_parser():
         "--buffer",
         type=str,
         default="ReplayBuffer",
+        help="Replay buffer for training"
+    )
+    parser.add_argument(
+        "--networks",
+        type=str,
+        default="",
         help="Replay buffer for training"
     )
     parser.add_argument(
@@ -88,10 +103,12 @@ def main():
         # experiment_log_dir setting
         experiment_log_dir, config, args, ckpt = setup_experiment_log_dir(args)
         set_seed(args.seed)
-
+        args.device = set_device(args.gpus)
+        config["device"] = args.device
+        
         ## Logger & Tensorboard setting
         logger = setup_logger(experiment_log_dir=experiment_log_dir)
-        set_log_level(args.pring_log_leval)
+        set_log_level(args.print_log_level)
         writer = setup_tensorboard(experiment_log_dir=experiment_log_dir)
 
         # Set up envs
@@ -139,11 +156,8 @@ def main():
 
         logger.info(f"{Fore.BLUE}Training start{Style.RESET_ALL}")
         
-        outputs = trainer.fit(data, args.max_epochs)
+        outputs = trainer.run_episodes()
         logger.info(f"{Fore.BLUE}\nTraining end, final epoch:  {outputs['epoch']} | best epoch: {trainer.best_state['epoch']}{Style.RESET_ALL}")
-
-        for stage in ["train", "valid"]:
-            log_outputs(outputs=outputs[stage], stage=stage, logger=logger)
             
         # outputs = trainer.test(data)
         # stage = "test"

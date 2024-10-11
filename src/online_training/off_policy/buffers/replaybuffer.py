@@ -14,14 +14,13 @@ class ReplayBuffer():
     """
     A simple FIFO experience replay buffer for SAC agents.
     """
-    def __init__(self, config: dict, args: argparse.Namespace = None):
+    def __init__(self, config: dict, args: argparse.Namespace = None, **kwargs):
         """
         env_config (dict): experience 들의 차원과 같은 정보들이 들어있는 dictionary
         """
-        self.args = vars(args) if args is not None else {}
+        args = vars(args) if args is not None else None
         self.buffer_size = args.get("buffer_size", BUFFER_SIZE)
-        self.batch_size = config["trainer"]["batch_size"]
-        self.device = config["trainer"]["device"]
+        self.device = config["device"]
         self.state_dim = config["env"]["state_dim"]
         self.action_dim = config["env"]["action_dim"]
 
@@ -61,14 +60,10 @@ class ReplayBuffer():
         self.ptr = (self.ptr+1) % self.buffer_size # buffer_size에 도달하면 첫번 째 요소로 돌아감.
         self.size = min(self.size+1, self.buffer_size) # buffer_size 이후 부터는 계속 max_size 유지
 
-    def sample_batch(self, force_batch_size=None):
+    def sample_batch(self, batch_size=None):
         """
         Buffer에 현재까지 채워져있는 샘플 중 batch_size 만큼의 데이터 추출
         """
-        if force_batch_size is not None:
-            batch_size = force_batch_size
-        else:
-            batch_size = self.batch_size
 
         idxs = np.random.randint(0, self.size, size=batch_size) # [0, self.size) 사이의 batch_size 만큼의 indices 추출
         batch = {"state": self.states[idxs], 

@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "workspace"
+name = "rl-implement"
 version = "0.1.0"
 description = ""
 authors = ["hyoon <hgyoon0928@naver.com>"]
@@ -15,7 +15,7 @@ ipykernel = "^6.29.5"
 gymnasium = {extras = ["box-2d"], version = "^0.29.1"}
 tensorboard = "^2.18.0"
 scipy = "^1.14.1"
-colorama = "^0.4.6"
+
 
 [build-system]
 requires = ["poetry-core"]

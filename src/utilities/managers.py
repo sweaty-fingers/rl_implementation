@@ -119,14 +119,14 @@ def config_decorator(func):
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if kwargs["config"] is None:
+        if kwargs.get("config") is None:
             if ConfigManager._instances.get(ConfigManager) is None:
                 raise ValueError("You should instantiate config")
             
             config_instance = ConfigManager._instances.get(ConfigManager)
             config = config_instance.config
             kwargs["config"] = config
-            
+
         return func(*args, **kwargs)
     return wrapper
 
@@ -137,17 +137,12 @@ def logger_decorator(func):
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
-        if kwargs["logger"] is None:
+        if kwargs.get("logger") is None:
             if LoggerManager._instances.get(LoggerManager) is None: # 정의되어있지 않을 경우 default logger 생성
                 LoggerManager()
             
             logger_instance = LoggerManager._instances.get(LoggerManager)
-            if logger_instance:
-                logger = logger_instance.get_logger()
-            else:
-                logger = None
-            
-            kwargs["logger"] = logger
+            kwargs["logger"] = logger_instance.logger
             
         return func(*args, **kwargs)
     return wrapper

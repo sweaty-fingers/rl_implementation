@@ -2,7 +2,7 @@ import logging
 from utilities.managers import logger_decorator
 
 @logger_decorator
-def add_log(msg, level="debug", logger=None):
+def add_log(msg, level="debug", logger=None, **kwargs):
     """
     log 메시지 출력
     """
@@ -16,7 +16,7 @@ def add_log(msg, level="debug", logger=None):
             print(f"Log level should be in {log_levels}")
             
 @logger_decorator
-def set_log_level(level, logger=None):
+def set_log_level(level, logger=None, **kwargs):
     numeric_level = getattr(logging, level.upper(), None)
     if not isinstance(numeric_level, int):
         raise ValueError(f'Invalid log level: {level}')

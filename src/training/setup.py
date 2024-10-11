@@ -44,15 +44,15 @@ def setup_experiment_log_dir(args: argparse.Namespace):
         except FileExistsError as e:
                 print(f"Error: no checkpoint directory found! {e}")
 
-        if args.max_training_step <= ckpt["global_step_num"] + 1:
+        if args.max_steps <= ckpt["global_step_num"] + 1:
             raise ValueError(f"max_training_step should be larger than current global step {ckpt['global_step_num']}")
         
     else:
         config = ConfigManager(args.config).config
-        logs_save_dir = config["DIRS"]["ROOT"]["EXPERIMENT_DIRNAME"]
-        experiment_description = f"{args.env}/{args.buffer}/{args.network}/{args.trainer}/{args.agent}"
+        logs_save_dir = config["dirs"]["root"]["experiment_logs"]
+        experiment_description = f"{args.env}/{args.buffer}/{args.trainer}/{args.agent}/{config['networks']['actor']['class_name']}"
 
-        if args.max_epochs < 3:
+        if args.max_steps < 3:
             experiment_log_dir = os.path.join(logs_save_dir, experiment_description, "test")
         else:
             i = 1
@@ -119,9 +119,9 @@ def setup_buffer(config: dict, args: argparse.Namespace, ckpt=None):
 
     ckpt: 이후 확장성, 다른 setup 함수와의 일관성을 위해 존재.
     """
-    
-    buffer_class = import_class(f"{args.buffer_class_module}.{args.data_class}")
-    buffer = buffer_class(batch_size=args.batch_size, device=args.device, config=config, args=args)
+    buffer_class_module = get_buffer_class_module(args)
+    buffer_class = import_class(f"{buffer_class_module}.{args.buffer}")
+    buffer = buffer_class(config=config, args=args)
 
     return buffer
 

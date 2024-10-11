@@ -1,377 +1,274 @@
-"""Basic LightningModules on which other modules can be built."""
 import argparse
+import csv
 import os
 import shutil
 import torch
-import numpy as np
 
-from tqdm import tqdm
-from typing import Union
-from colorama import Fore, Style, init
+from utilities.metrics import MetricsMeter, LogMetrics
+from utilities.trainer_util import is_best
+from utilities.util import make_config, remove_old_checkpoints, save_dict_to_csv
+from utilities.logger_util import add_log
 
-from utils.util import remove_old_checkpoints, get_attr_from_module
-from utils.managers import (
-    ConfigManager, 
-    logger_decorator, 
-    tensorboard_decorator, 
-    update_tensorboard
-)
-from online_training.trainers.decorators import (
-    add_to_csv, 
-    update_metrics, 
-    log_outputs, 
-    save_checkpoint,
-    update_scheduler
-)
+CONFIG_IGNORE = ["args", "config"]
 
-from online_training.trainers.metrics import MetricsMeter
+MIN_STEPS_BEFORE_LEARNING = 200
+N_UPDATES_PER_LEARNING = 50
+EVAL_EVERY_N_STEPS = 200
+SAVE_EVERY_N_STEPS = 200
+UPDATE_EVERY_N_STEPS = 200
+SAVING = 1000
+RUN_EVAL_EPISODE = True
+BATCH_SIZE = 64
+ROLLING_WINDOW_SIZE = 100
 
-init(autoreset=True)
-
-CONFIG_IGNORE = ["args"]
-
-OPTIMIZER_MODULE_NAME = "torch.optim"
-OPTIMIZER = "Adam"
-LR = 2e-5
-
-NO_PROGRESS = False
-FUNC_KEYS = ["loss_fn", "optimizer_class"]
-TEST_METRIC = "loss"
-CRITERION = "min" 
-POSSIBLE_CRITERION = ["min", "max"]
-STEPS_PER_EPOCH = 2000
-STEPS_PER_EPOCH_VALID = 100
-EPOCHS_PER_SAVE = 1000
-
+TEST_METRIC = "return"
+CRITERION = "max"
 
 class BaseTrainer():
     """
-    Trainer schema
+    Agent와 Environment의 상호 작용, 학습을 담당하는 클래스
     """
-    @tensorboard_decorator
-    @logger_decorator
-    def __init__(self, args: argparse.Namespace = None, logger=None, checkpoint=None, tb_writer=None):
-        config_manger = ConfigManager(args.config)
-        self.config = config_manger.get_config()
-        self.logger = logger
-        self.args = vars(args) if args is not None else {}
-        
+    def __init__(self, env, buffer, agent, config: dict, args: argparse.Namespace = None):
+        args = vars(args) if args is not None else {}
+        self.env = env
+        self.buffer = buffer
+        self.agent = agent
+
         # Set Device
-        self.device = "cpu"
-        self.gpus = self.args.get("gpus", None)
-        if self.gpus is not None:
-            if torch.cuda.is_available():
-                self.device = f"cuda:{self.gpus}"
-            elif torch.backends.mps.is_available():
-                self.device = f"mps:{self.gpus}"
-
-        self.add_log(f"{Fore.GREEN}{self.device}{Style.RESET_ALL}", level="info")
+        self.device = config["device"]
+        # Trainin steps
+        self.max_steps = config["max_steps"]
+        # Checkpoints 
+        self.checkpoint = config["checkpoint"]
         
-        # DataModule & Model
-        self.data_config = self.model.data_config
-        self.input_dim = self.data_config["input_dim"]
-        self.output_dim = self.data_config["output_dim"]
-        
-        # optimizer & scheduler
-        self.optimizer = None
-        optimizer_module = self.args.get("optimizer_module", OPTIMIZER_MODULE_NAME)
-        optimizer = self.args.get("optimizer", OPTIMIZER)
-        self.optimizer_class = get_attr_from_module(optimizer_module, optimizer)
-        self.lr = self.args.get("lr", LR)
-        self.scheduler = self.args.get("scheduler_mode", None)
+        # Metric setting
+        self.rolling_window_size = args.get("rolling_window_size", ROLLING_WINDOW_SIZE)
+        self.metrics = MetricsMeter() # 단일 episode 지표를 기록할 metric
+        self.log_metrics = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
+        self.log_metrics_eval = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
+        self.log_metrics.add_metric_log("return", "max")
+        self.log_metrics_eval.add_metric_log("return", "max")
 
-        loss_module = self.args.get("loss_module", LOSS_MODULE_NAME)
-        loss = self.args.get("loss", LOSS)
-        self.loss_fn = get_attr_from_module(loss_module, loss)
-        self.add_log(f"{Fore.GREEN}Loss fuction: {self.loss_fn.__name__}{Style.RESET_ALL}", level="info")
+        self.test_metric = args.get("test_metric", TEST_METRIC)
+        self.criterion = args.get("test_criterion", CRITERION)
 
-        # Add model graphs in tensorboard
-        if tb_writer is not None:
-            self.add_log(f"{Fore.GREEN}Add model graph in tensorboard{Style.RESET_ALL}", level="info")
-            dummy = torch.randn(self.data_config["input_dim"])
-            tb_writer.add_graph(self.model, dummy)
+        # Training settings
+        self.batch_size = args.get("batch_size", BATCH_SIZE)
 
-        # Checkpoints
-        self.save_dirs = self.config["CHECKPOINTS"]
-        self.checkpoint = checkpoint # ckpt file (.pth)
-        self.best_state = None
-        
+        self.stage = "train"
+        self.min_steps_before_learning = args.get("min_steps", MIN_STEPS_BEFORE_LEARNING)
+        self.run_eval_episode = args.get("run_eval_episode", RUN_EVAL_EPISODE)
+        self.n_updates_per_learning = args.get("n_updates_per_learning", N_UPDATES_PER_LEARNING)
+        self.update_every_n_steps = args.get("update_every_n_steps", UPDATE_EVERY_N_STEPS)
+        self.eval_every_n_steps = args.get("eval_every_n_steps", EVAL_EVERY_N_STEPS)
+        self.save_every_n_steps = args.get("save_every_n_steps", SAVE_EVERY_N_STEPS)
+
+        self._config = make_config(self, CONFIG_IGNORE)
+
+        # Rescent episode infos:
+        self.state = None
+        self.action = None
+        self.next_state = None
+        self.reward = None
+        self.done = False
+        self.steps_in_episode = 0 # episode내 step
+        self.states_in_episode = []
+        self.actions_in_episode = []
+        self.next_states_in_episode = []
+        self.rewards_in_episode = []
+        self.dones_in_episode = []
+
+    @property
+    def config(self):
+        return self._config
+
+    def reset_env(self):
+        """
+        에피소드 종료 후 환경 리셋 
+        """
+        self.state = self.env.reset() # env의 첫 번째 요소 state 반환
+        self.action = None
+        self.next_state = None
+        self.reward = None
+        self.done = False
+        self.steps_in_episode = 0
+        self.states_in_episode = []
+        self.actions_in_episode = []
+        self.next_states_in_episode = []
+        self.rewards_in_episode = []
+        self.dones_in_episode = []
+
         # Metric
-        self.metrics = MetricsMeter()
-        self.test_metric = self.args.get("test_metric", TEST_METRIC)
-        self.criterion = self.args.get("test_criterion", CRITERION)
-        if self.criterion not in POSSIBLE_CRITERION:
-            raise ValueError(f"criterion should be in {POSSIBLE_CRITERION}\n Now get {self.criterion}")
-
-        if self.criterion == "min":
-            self.best_metric = np.inf
-        elif self.criterion == "max":
-            self.best_metric = -np.inf
-        
-        # Training setting
-        self.stage = "train"
-        self.start_epoch = 0
-        self.current_epoch = self.start_epoch
-        self.step = 0
-        self.steps_per_epoch = self.args.get("steps_per_epoch", STEPS_PER_EPOCH)
-        self.steps_per_epoch_valid = self.args.get("steps_per_epoch_valid", STEPS_PER_EPOCH_VALID)
-        self.epochs_per_save = self.args.get("epochs_per_save", EPOCHS_PER_SAVE)
-        self.best_metric: Union[int, float]
-        self.test_metric: str
-        
-        # reward
-        self.success_reward: float
-        self.fail_reward: float
-        self.step_reward: float
-        self.timeout_reward: float
-        
-        # Etc
-        self.no_progress = self.args.get("no_progress", NO_PROGRESS)
-    
-    def configure_optimizers(self):
-        """
-        actor와 critic의 optimizer 정의
-        """
-        pass
-    def forward(self, x):
-        self.model(x)
-    
-    def predict(self, x):
-        pass
-    
-    def fit(self, datamodule = None, max_epoch: int = 1) -> dict:
-        """전체 학습 루프 작성"""
-        self.models_to_device()
-        self.configure_optimizers()
-        
-        if self.checkpoint:
-            self.load_optimizer() 
-            
-        self.add_log("Training started....", "debug")
-        for epoch in tqdm(range(self.start_epoch, max_epoch), initial=self.start_epoch, total=max_epoch, leave=False, position=0, desc=f"{Fore.BLUE}Start: fit, device: {self.device}{Style.RESET_ALL}"):
-            self.current_epoch = epoch
-            self.add_log(f"Epoch: {epoch}", "debug")
-
-            train_outputs = self.training_epoch(
-                dataloader=datamodule.train_dataloader(),
-            )
-
-            valid_outputs = self.validation_epoch(
-                dataloader=datamodule.valid_dataloader()
-            )
-
-        outputs = {
-            "train": train_outputs,
-            "valid": valid_outputs,
-            "epoch": self.current_epoch,
-        }  #
-        self.add_log("Training ended....", "debug")
-
-        return outputs
-    
-    @add_to_csv("train_metric")
-    @update_tensorboard
-    @log_outputs("debug")
-    def training_epoch(self, dataloader: torch.utils.data.dataloader = None):
-        "training epoch 작업"
-        self.stage = "train"
         self.metrics.reset_all()
-
-        progress_bar = tqdm(total=self.steps_per_epoch, position=1, desc=f"{Fore.BLUE}Start: {self.stage}, device: {self.device}{Style.RESET_ALL}", leave=False)
-        data_iter, batch_idx = iter(dataloader), 0
-        while batch_idx < self.steps_per_epoch:
-            try:
-                batch = next(data_iter)
-                _ = self.training_step(batch=batch, batch_idx=batch_idx)
-                
-            except StopIteration:
-                data_iter = iter(dataloader)
-                batch = next(data_iter)
-                _ = self.training_step(batch=batch, batch_idx=batch_idx)
-            
-            batch_idx += 1
-            progress_bar.update(1)
-            
-        self.add_log(f"step: {batch_idx} -> epoch{self.current_epoch}", "debug") 
-        outputs = {}
-        for key, value in self.metrics.avg_items():
-            outputs[key] = value
-        
-        outputs["lr"] = self.optimizer.param_groups[0]["lr"]
-        return outputs
     
-    @update_metrics
-    def training_step(self, batch, batch_idx) -> dict:
-        self.step += 1
-        self.optimizer.zero_grad()
-        outputs = self._run_on_batch(batch=self.data_to_device(batch))
-        outputs["loss"].backward()
-        self.optimizer.step()
-        
-        return outputs
-
-    @update_scheduler("loss")
-    @log_outputs("debug")
-    @add_to_csv("valid_metric")
-    @update_tensorboard
-    @save_checkpoint
-    def validation_epoch(self, dataloader: torch.utils.data.dataloader = None) -> dict:
-        "validation epoch 작업"
-        self.stage = "valid"
-        self.metrics.reset_all()
-        self.models_to_eval()
-        
-        progress_bar = tqdm(total=self.steps_per_epoch_valid, position=1, desc=f"{Fore.BLUE}Start: {self.stage}, device: {self.device}{Style.RESET_ALL}", leave=False)
-        
-        data_iter, batch_idx = iter(dataloader), 0
-        while batch_idx < self.steps_per_epoch_valid:
-            try:
-                batch = next(data_iter)
-                with torch.no_grad():
-                    outputs = self.validation_step(batch=batch, batch_idx=batch_idx)
-
-            except StopIteration:
-                data_iter = iter(dataloader)
-                batch = next(data_iter)
-                with torch.no_grad():
-                    outputs = self.validation_step(batch=batch, batch_idx=batch_idx)
-
-            progress_bar.update(1)
-            batch_idx += 1
-            
-        outputs = {}
-        for key, value in self.metrics.avg_items():
-            outputs[key] = value
-        
-        return outputs
-    
-    @update_metrics
-    def validation_step(self, batch, batch_idx):
-        "validation step 작업"
-        outputs = self._run_on_batch(batch=self.data_to_device(batch))
-        return outputs
-    
-    def test(self) -> dict:
-        """테스트 루프 작성"""
-       
-    def test_epoch(self, dataloader: torch.utils.data.dataloader = None, epoch_idx=1) -> dict:
-        """test epoch 작업"""
-        pass
-    
-    def test_step(self, batch, batch_idx):
-        """est step 작업"""
-        pass
-    
-    def _run_on_batch(self, batch, with_preds=False):
-        """batch 데이터를 받아서 모델과 수행할 작업"""
-        pass
-    
-    def data_to_device(self, batch):
-        data_in_device = []
-        for b in batch:
-            data_in_device.append(b.to(self.device))
-            
-        return data_in_device
-    
-    def models_to_device(self):
-        """target, pollicy model등 알고리즘에 맞게 추가하여 오버라이드"""
-        self.model.eval()
-
-    def models_to_eval(self):
-        """target, pollicy model등 알고리즘에 맞게 추가하여 오버라이드"""
-        self.model.to(self.device)
-    
-    def save_configs(self):
-        attrs = {
-            k: v.__class__.__name__ if (k in FUNC_KEYS and v is not None) else v
-            for k, v in self.__dict__.items()
-            if k in CONFIG_KEYS
-        }
-        attrs["class_name"] = self.__class__.__name__
-        attrs["loss_fn"] = self.loss_fn.__name__
-        attrs["optimizer_class"] = self.optimizer_class.__name__
-        
-        return attrs
-    
-    def get_attrs(self):
+    def run_episodes(self):
         """
-        Config에 저장할 내용
+        episode 동작
         """
-        # 데이터, 모델에 대한 config 내용 모두 trianer로 와서 config 파일에 저장하기
-        attrs = {k: v.__name__ if (k in FUNC_KEYS and v is not None) else v for k, v in self.__dict__.items() if k in CONFIG_KEYS}
-        attrs["class_name"] = self.__class__.__name__
-        return attrs
-
-    def get_n_success_fail(self, reward):
-        """
-        batch에서 성공과 실패 개수와 idx 반환
-        """
-        success_idx = reward.squeeze() == self.success_reward
-        fail_idx = reward.squeeze() == self.fail_reward
-        n_success = sum(success_idx)
-        n_fail = sum(fail_idx)
+        while self.agent.global_step_num < self.max_steps:
+            self.reset_env()
+            while not self.done:
+                outputs = self.run_step_in_episode()
+                self.update_metrics(outputs=outputs)
+                self.track_recent_episode()
             
-        return n_success, n_fail, success_idx, fail_idx
+            self.update_log_metrics()
+            self.agent.global_episode_num += 1
 
-    def save_checkpoint(self, state: dict, is_best: bool, filename='checkpoint', ext='.pth'):
+    def run_step_in_episode(self):
+        self.action = self.agent.sample_action(self.state, is_eval=self.is_eval)
+
+        self.next_state, self.reward, terminated, truncated, info = self.env.step(self.action)
+        self.done = terminated or truncated
+
+        if self.time_to_learn:
+            for _ in self.n_updates_per_learning:
+                self.agent.update(self.buffer.sample_batch())
+
+        if not self.is_eval:
+            self.buffer.add_experience(state=self.state, action=self.action, next_state=self.next_state, \
+                                       reward=self.reward, done=self.done)
+
+        self.state = self.next_state
+        self.agent.global_step_num += 1
+        self.steps_in_episode += 1
+
+        return {"reward": self.reward}
+
+    def update_log_metrics(self):
+        key_mapping = {"reward": "return"}
+
+        if self.is_eval:
+            log_metrics = self.log_metrics_eval
+        else:
+            log_metrics = self.log_metrics
+
+        for key, metric in self.metrics.items():
+            if key in key_mapping:
+                log_metrics[key_mapping[key]].update(metric.sum, n_repeat_for_eval=self.eval_every_n_steps)
+            else:
+                log_metrics[key_mapping[key]].update(metric.sum, n_repeat_for_eval=self.eval_every_n_steps)
+
+    def update_metrics(self, outputs):
+        for key, value in outputs.items():
+            if isinstance(value, torch.Tensor):
+                value = value.item()
+            self.metrics[key].update(value)
+
+    def save_metrics_csvs(self):
+        csv_path = os.path.join(self.checkpoint["dirs"]["csv"], "metrics")
+        if self.is_eval:
+            metrics = self.log_metrics_eval
+            filepath = os.path.join(csv_path, "metrics_evl.csv")
+        else:
+            metrics = self.log_metrics_eval
+            filepath = os.path.join(csv_path, "metrics.csv")
+
+        save_dict_to_csv(metrics.recent_values_to_dict(), filepath=filepath)
+
+    def track_recent_episode(self):
+        """Saves the data from the recent episodes"""
+        self.states_in_episode.append(self.state)
+        self.actions_in_episode.append(self.action)
+        self.rewards_in_episode.append(self.reward)
+        self.next_states_in_episode.append(self.next_state)
+        self.dones_in_episode.append(self.done)
+    
+    def save_checkpoint(self, state_dict, filename="ckpt", ext=".pth"):
+        ckpt_dir = self.checkpoint["dirs"]["ckpt"]
+        current_score = self.log_metrics[self.test_metric].moving_avg_log[-1]
+        best_score = self.log_metrics[self.test_metric].best_moving_avg
         
-        ckpt_dir = self.save_dirs["CKPT_DIRNAME"]
-        pattern = f"epoch{self.current_epoch}_{self.test_metric}{self.best_metric:.2f}"
-            
-        filepath = os.path.join(ckpt_dir, f"{filename}_{pattern}" + ext)
-        torch.save(state, filepath)
-        if is_best:
-            self.add_log(f"====> Save best model | {self.test_metric}:{self.best_metric}\n", "debug")
+        if is_best(best_score, current_score) or ((self.agent.global_step_num) % self.save_every_n_steps == 0):
+            pattern = f"e{self.agent.global_episode_num}s{self.agent.global_step_num}m{self.test_metric}b{current_score:.2f}"
+            filepath = os.path.join(ckpt_dir, f"{filename}_{pattern}" + ext)
+            torch.save(state_dict, filepath)
+
+            # best_state는 model_best로 시작하는 checkpoint로 저장.
+            add_log(f"====> Save best model | {self.test_metric}:{best_score}\n", "debug")
             remove_old_checkpoints(ckpt_dir, prefix="model_best", extension=ext)
             shutil.copyfile(filepath, os.path.join(ckpt_dir, f'model_best_{pattern}{ext}'))
-            self.best_state = state
 
-    @log_decorator
-    def load_state(self, logger=None):
-        if logger is not None:
-            logger.info(f"{Fore.GREEN}==> Resuming from checkpoint..{Style.RESET_ALL}")
+    @property
+    def is_eval(self):
+        """
+        evaluation 단계 확인
+        """
+        return (self.steps_in_episode % self.eval_every_n_steps == 0) and self.run_eval_episode
+    
+    @property
+    def time_to_learn(self):
+        """
+        buffer_size가 batch_size 보다 큰지, 최소 buffer_size, n_step learning 체크.
+        """
+        return self.check_enough_experiences_in_buffer and self.check_minimum_step_before_training and self.check_update_every_n_steps
+    
+    @property
+    def check_minimum_step_before_training(self):
+        """
+        학습을 하기 전 채워야할 최소 buffer 사이즈 체크
+        """
+        return self.agent.global_step_num > self.min_steps_before_learning
+    
+    @property
+    def check_update_every_n_steps(self):
+        """
+        self.n_step_learning 에 한번씩 학습
+        """
+        return self.agent.global_step_num % self.update_every_n_steps == 0
 
-        self.model.load_state_dict(self.checkpoint["model_state_dict"])    
-        self.start_epoch = self.checkpoint['epoch'] + 1
-        self.current_epoch = self.start_epoch
-        self.step = self.checkpoint["step"] + 1
-    
-    @log_decorator
-    def load_optimizer(self, logger=None):
-        if logger is not None:
-            logger.info(f"{Fore.GREEN}==> load_checkpoint optimizer{Style.RESET_ALL}")
-        self.optimizer.load_state_dict(self.checkpoint['optimizer_state_dict'])
-            
-        if self.scheduler is not None:
-            logger.info(f"{Fore.GREEN}==> load checkpoint scheduler{Style.RESET_ALL}")
-            self.scheduler.load_state_dict(self.checkpoint['scheduler_state_dict'])
-    
-    def add_log(self, msg, level="debug"):
-        log_levels = ["debug", "info", "warning", "error", "critical"]
-        if self.logger is None:
-            print(msg)
-        else:
-            if level in log_levels:
-                getattr(self.logger, level)(msg)
-            else:
-                print(f"Log level should be in {log_levels}")
-    
+    @property
+    def check_enough_experiences_in_buffer(self):
+        """
+        버퍼 안에 충분한 수의 experience(>batch_size)가 있는지 확인
+        """
+        return len(self.buffer) > self.batch_size
+        
     @staticmethod
     def add_to_argparse(parser):
-
+        """
+        Trainer에 필요한 parser 정의
+        """
         parser.add_argument(
             "--no_progress", action="store_true", help="don't use progress bar"
         )
         parser.add_argument(
-            "--gpus",
-            default=None,
-            type=int,
-            help="id(s) for GPU_VISIBLE_DEVICES(MPS or CUDA)",
+            "--run_eval_episode", action="store_true", help="Run eval_episode during training"
+        )
+        
+        parser.add_argument(
+            "--save_every_n_steps", type=int, default=SAVE_EVERY_N_STEPS, help="number of step per saving checkpoint"
         )
         parser.add_argument(
-            "--epochs_per_save", type=int, default=EPOCHS_PER_SAVE, help="epochs per saving model state"
+            "--rolling_window_size",
+            type=int,
+            default=ROLLING_WINDOW_SIZE,
+            help="Size of rolling window"
         )
-
+        parser.add_argument(
+            '--min_steps_before_training',
+            type=int,
+            default=MIN_STEPS_BEFORE_LEARNING,
+            help="Minimum steps before learning"
+        )
+        parser.add_argument(
+            '--n_updates_per_learning',
+            type=int,
+            default=N_UPDATES_PER_LEARNING,
+            help="Number of updates for learning"
+        )
+        parser.add_argument(
+            '--update_every_n_steps',
+            type=int,
+            default=UPDATE_EVERY_N_STEPS,
+            help = "Update agent every n steps"
+        )
+        parser.add_argument(
+            '--eval_every_n_steps',
+            type=int,
+            default=EVAL_EVERY_N_STEPS,
+            help="Number of episode per running eval"
+        )
         parser.add_argument(
             "--test_metric",
             type=str,
@@ -385,47 +282,5 @@ class BaseTrainer():
             help="Min or Max for comparing test metric"
 
         )
-        parser.add_argument(
-            '--steps_per_epoch',
-            type=int,
-            default=STEPS_PER_EPOCH,
-            help="Max step nubmer for one epoch"
-        )
-        parser.add_argument(
-            '--steps_per_epoch_valid',
-            type=int,
-            default=STEPS_PER_EPOCH,
-            help="Max step nubmer for one epoch"
-        )
-        parser.add_argument(
-            "--optimizer_module",
-            type=str,
-            default=OPTIMIZER_MODULE_NAME,
-            help="optimizer module to get optimizer class"
-        )
-        parser.add_argument(
-            "--optimizer",
-            type=str,
-            default=OPTIMIZER,
-            help="optimizer class from torch.optim",
-        )
-        parser.add_argument("--lr", type=float, default=LR)
-        parser.add_argument(
-            "--scheduler_mode",
-            type=str,
-            default=None,
-            help="lr_schduler mode, (min, max, ...)",
-        )
-        parser.add_argument(
-            "--loss_module",
-            type=str,
-            default=LOSS_MODULE_NAME,
-            help="loss module name to get loss function"
-        )
-        parser.add_argument(
-            "--loss",
-            type=str,
-            default=LOSS,
-            help="loss function from torch.nn.functional",
-        )
+
         return parser

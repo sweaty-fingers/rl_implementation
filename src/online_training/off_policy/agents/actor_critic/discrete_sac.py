@@ -36,8 +36,8 @@ class DiscreteSACAgent(BaseAgent):
     """
     Discrete action space에서의 soft actor-critic trainer
     """
-    def __init__(self, actor, critic_1, critic_2, args: argparse.Namespace = None, config=None, logger=None):
-        super().__init__(args=args, config=config, logger=logger)
+    def __init__(self, actor, critic_1, critic_2, config: dict, args: argparse.Namespace = None):
+        super().__init__(args=args, config=config, ckpt=ckpt)
         self.args = vars(args) if args is not None else {}
         # Models
         self.actor = actor

@@ -24,6 +24,17 @@ def set_seed(seed, env: Optional[gym.Env] = None):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
+def set_device(gpus):
+    # Set Device
+    device = "cpu"
+    if gpus is not None:
+        if torch.cuda.is_available():
+            device = f"cuda:{gpus}"
+        elif torch.backends.mps.is_available():
+            device = f"mps:{gpus}"
+    
+    return device
+
 def create_directory(path):
     if os.path.exists(path):
         response = input(f"{Fore.RED}The directory '{path}' already exists. Do you want to delete it and create a new one? (y/n): {Style.RESET_ALL}")
