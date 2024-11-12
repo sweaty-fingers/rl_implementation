@@ -28,37 +28,35 @@ class BaseTrainer():
     """
     Agent와 Environment의 상호 작용, 학습을 담당하는 클래스
     """
-    def __init__(self, env, buffer, agent, config: dict, args: argparse.Namespace = None):
+    def __init__(self, env, buffer, agent, device, batch_size: int = None, rolling_window_size: int = None, test_metric: str = None,\
+                  criterion: str = None, min_steps: int = None, run_eval_episode: bool = None, args: argparse.Namespace = None, **kwargs):
         args = vars(args) if args is not None else {}
         self.env = env
         self.buffer = buffer
         self.agent = agent
 
         # Set Device
-        self.device = config["device"]
-        # Trainin steps
-        self.max_steps = config["max_steps"]
-        # Checkpoints 
-        self.checkpoint = config["checkpoint"]
+        self.device = device
         
         # Metric setting
-        self.rolling_window_size = args.get("rolling_window_size", ROLLING_WINDOW_SIZE)
+        self.rolling_window_size = args.get("rolling_window_size", ROLLING_WINDOW_SIZE) if rolling_window_size is None else rolling_window_size
         self.metrics = MetricsMeter() # 단일 episode 지표를 기록할 metric
         self.log_metrics = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
         self.log_metrics_eval = LogMetrics(rolling_window_size=self.rolling_window_size) # episode 단위로 metric 기록
         self.log_metrics.add_metric_log("return", "max")
         self.log_metrics_eval.add_metric_log("return", "max")
 
-        self.test_metric = args.get("test_metric", TEST_METRIC)
-        self.criterion = args.get("test_criterion", CRITERION)
+        self.test_metric = args.get("test_metric", TEST_METRIC) if test_metric is None else test_metric
+        self.criterion = args.get("test_criterion", CRITERION) if criterion is None else criterion # 나중에 metric class에 통합하기
 
         # Training settings
-        self.batch_size = args.get("batch_size", BATCH_SIZE)
+        self.batch_size = args.get("batch_size", BATCH_SIZE) if batch_size is None else batch_size
 
         self.stage = "train"
-        self.min_steps_before_learning = args.get("min_steps", MIN_STEPS_BEFORE_LEARNING)
-        self.run_eval_episode = args.get("run_eval_episode", RUN_EVAL_EPISODE)
-        self.n_updates_per_learning = args.get("n_updates_per_learning", N_UPDATES_PER_LEARNING)
+        self.max_training_steps = args.get()
+        self.min_steps_before_learning = args.get("min_steps", MIN_STEPS_BEFORE_LEARNING) if min_steps is None else min_steps
+        self.run_eval_episode = args.get("run_eval_episode", RUN_EVAL_EPISODE) if run_eval_episode is None else run_eval_episode
+        self.n_updates_per_learning = args.get("n_updates_per_learning", N_UPDATES_PER_LEARNING) 
         self.update_every_n_steps = args.get("update_every_n_steps", UPDATE_EVERY_N_STEPS)
         self.eval_every_n_steps = args.get("eval_every_n_steps", EVAL_EVERY_N_STEPS)
         self.save_every_n_steps = args.get("save_every_n_steps", SAVE_EVERY_N_STEPS)
@@ -84,7 +82,8 @@ class BaseTrainer():
 
     def reset_env(self):
         """
-        에피소드 종료 후 환경 리셋 
+        에피소드 종료 후 환경 리셋 (off-policy는 환경과 실시간으로  상호작용을 하면서행
+        데이터를 버퍼에 모으다가 일정 스탭 간격으로 학습을 수행)
         """
         self.state = self.env.reset() # env의 첫 번째 요소 state 반환
         self.action = None
@@ -100,6 +99,9 @@ class BaseTrainer():
 
         # Metric
         self.metrics.reset_all()
+
+    def run(self, max_steps):
+
     
     def run_episodes(self):
         """
@@ -116,6 +118,9 @@ class BaseTrainer():
             self.agent.global_episode_num += 1
 
     def run_step_in_episode(self):
+        """
+        episode 내부 단일 스텝에 대한 동작
+        """
         self.action = self.agent.sample_action(self.state, is_eval=self.is_eval)
 
         self.next_state, self.reward, terminated, truncated, info = self.env.step(self.action)
@@ -283,4 +288,4 @@ class BaseTrainer():
 
         )
 
-        return parser
+        return parserㄷ

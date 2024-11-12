@@ -1,15 +1,17 @@
-#SHELL := /bin/zsh
+# SHELL := /bin/zsh
+SHELL := /bin/zsh -l
+# SHELL:=/bin/zsh
 # Variables
 WORKDIR := $(shell pwd)
 DOCKERFILE_DIRNAME = ubuntu2204
-DOCKERFILE = $(WORKDIR)/Dockerfile
+DOCKERFILE = $(WORKDIR)/docker/Dockerfile
 
 DOCKER_IMAGE_NAME = "rl_implement-$(DOCKERFILE_DIRNAME)"
-DOCKER_CONTAINER_NAME = "rl_implement-$(DOCKERFILE_DIRNAME)"
+DOCKER_CONTAINER_NAME = "rl_implement-$(DOCKERFILE_DIRNAME)-test"
 
 WORKSPACE_DIR := $(shell pwd)
-SAVE_DATA_DIR := /Users/yunhyeongeun/Documents/data/codes/rl_implement
-SAVE_DATA_DIR_CONTAINER := /mnt/data
+SAVE_DATA_DIR := /Users/yunhyeongeun/Documents/dataset/codes/rl_implement
+SAVE_DATA_DIR_CONTAINER := /mnt/dataset
 
 PORT_JUPYTER = 8891
 PORT_STREAMLIT = 8892
@@ -31,8 +33,7 @@ build:
 # -v $(DATASET_DIR):/dataset
 run:
 	@echo "Running Docker container..."
-	sudo docker run -it --name $(DOCKER_CONTAINER_NAME) -v $(WORKSPACE_DIR):/workspace -v $(SAVE_DATA_DIR):$(SAVE_DATA_DIR_CONTAINER) \
-	-p $(PORT_JUPYTER):$(PORT_JUPYTER) -p $(PORT_STREAMLIT):$(PORT_STREAMLIT) -p $(PORT_MLFLOW):$(PORT_MLFLOW) -p $(PORT_TENSORBOARD):$(PORT_TENSORBOARD) -p $(PORT_SUB):$(PORT_SUB) $(DOCKER_IMAGE_NAME)
+	docker run -it --name $(DOCKER_CONTAINER_NAME) -v $(WORKSPACE_DIR):/workspace -v $(SAVE_DATA_DIR):$(SAVE_DATA_DIR_CONTAINER) -p $(PORT_JUPYTER):$(PORT_JUPYTER) -p $(PORT_STREAMLIT):$(PORT_STREAMLIT) -p $(PORT_MLFLOW):$(PORT_MLFLOW) -p $(PORT_TENSORBOARD):$(PORT_TENSORBOARD) -p $(PORT_SUB):$(PORT_SUB) $(DOCKER_IMAGE_NAME)
 
 # Stop the Docker container
 
@@ -74,21 +75,3 @@ jupyter-notebook:
 streamlit-run:
 	@echo "Run Streamlit dashboard"
 	streamlit run dashboard/app/main.py --server.port $(PORT_STREAMLIT) --server.address 0.0.0.0
-
-# requirements.txt는 라이브러리 설치할 때 마다 직접 추가하는 것을 추천
-make-requirements:
-	rm requirements.txt
-	pipreqs .
-
-# tmux
-tmux-cli:
-	tmux new -s docker-cli
-tmux-stop-cli:
-	tmux kill-session -t docker-cli
-
-# vim in terminal
-vim-terminal-zsh:
-	bindkey -v
-
-vim-terminal-bash:
-	set -o vi
