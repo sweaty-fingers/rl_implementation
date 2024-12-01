@@ -36,6 +36,7 @@ RUN apt-get update \
     libffi-dev \
     liblzma-dev \
     lsof\
+    tree\
     && sed -i 's/# set linenumbers/set linenumbers/g' /etc/nanorc \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*
@@ -83,6 +84,7 @@ WORKDIR /workspace
 # Set environment variables for CUDA
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ENV PATH=/usr/local/cuda/bin:$PATH
+ENV PATH="/workspace/scripts:${PATH}"
 
 ENV PYTHONPATH=/workspace
 ENV PYTHONPATH="/workspace/src:$PYTHONPATH"

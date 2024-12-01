@@ -13,6 +13,10 @@ import gymnasium as gym
 from typing import Optional
 from colorama import Fore, Style
 
+def load_config(config_path):
+    with open(config_path, 'r') as file:
+        return yaml.safe_load(file)
+
 def set_seed(seed, env: Optional[gym.Env] = None):
     if env is not None:
         env.seed(seed)
@@ -24,15 +28,30 @@ def set_seed(seed, env: Optional[gym.Env] = None):
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
 
-def set_device(gpus):
-    # Set Device
-    device = "cpu"
-    if gpus is not None:
-        if torch.cuda.is_available():
-            device = f"cuda:{gpus}"
-        elif torch.backends.mps.is_available():
-            device = f"mps:{gpus}"
+def get_device(device: Union[th.device, str] = "auto") -> th.device:
+    """
+    Retrieve PyTorch device.
+    It checks that the requested device is available first.
+    For now, it supports only cpu and cuda.
+    By default, it tries to use the gpu.
+
+    만약 여러 gpu가 세팅된 상태에서 특정 gpu를 사용하고 싶다면, device = f"cuda:{gpu_id}" 와 같이 사용
+
+    :param device: One for 'auto', 'cuda', 'cpu'
+    :return: Supported Pytorch device
     
+    
+    """
+    # Cuda by default
+    if device == "auto":
+        device = "cuda"
+    # Force conversion to th.device
+    device = torch.device(device)
+
+    # Cuda not available
+    if device.type == th.device("cuda").type and not th.cuda.is_available():
+        return th.device("cpu")
+
     return device
 
 def create_directory(path):

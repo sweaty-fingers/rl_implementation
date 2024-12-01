@@ -6,17 +6,17 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
+from dataclasses import dataclass
 from typing import Any
 from copy import deepcopy
 from colorama import Fore, Style
 from utilities.util import get_attr_from_module, make_config
 from utilities.torch_util import create_actor_distribution
 from utilities.managers import tensorboard_decorator
-from utilities.logger_util import add_log
+from utilities.agent_util import soft_update
 from training.setup import import_class
 
-from online_training.off_policy.agents.actor_critic.base import BaseAgent
-from utilities.agent_util import soft_update
+from .base import BaseAgent
 
 
 CONFIG_IGNORE = ["args"]
@@ -32,12 +32,28 @@ CRITIC_TAU = 0.005
 
 AUTOMATIC_ENTROPY_TUNING = False # entropy를 학습 가능한 파라미터로 설정
 
+@dataclass
+class DiscreteSacConfig:
+    """
+    Discrete SAC 학습에 필요한 설정 정보
+    """
+    alpha: float = ALPHA # entropy 계수
+    gamma: float = GAMMA # 할인 계수
+    critic_tau: float = CRITIC_TAU # target critic network 업데이트 계수
+    automatic_entropy_tuning: bool = AUTOMATIC_ENTROPY_TUNING # entropy 학습 가능 여부
+
+    def build(self):
+
+        agent = DiscreteSACAgent()
+        agent.add_network_graph_in_tb_writer()
+
+
 class DiscreteSACAgent(BaseAgent):
     """
     Discrete action space에서의 soft actor-critic trainer
     """
     def __init__(self, actor, critic_1, critic_2, config: dict, args: argparse.Namespace = None):
-        super().__init__(args=args, config=config, ckpt=ckpt)
+        super().__init__(config=config, ckpt=ckpt)
         self.args = vars(args) if args is not None else {}
         # Models
         self.actor = actor
@@ -45,8 +61,6 @@ class DiscreteSACAgent(BaseAgent):
         self.critic_2 = critic_2
         self.target_critic_1, self.target_critic_2 = deepcopy(self.critic_1), deepcopy(self.critic_2)
         self.critic_tau = self.args.get("target_critic_tau", CRITIC_TAU)
-
-        self.add_network_graph_in_tb_writer()
 
         # Optimizers
         self.actor_optimizer, self.critic_1_optimizer, self.critic_2_optimizer = None, None, None
