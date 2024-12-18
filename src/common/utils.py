@@ -1,32 +1,139 @@
 import glob
-import csv
-import importlib
 import os
+import platform
 import random
-import shutil
-import json
+import re
+from collections import deque
+from collections.abc import Iterable
+from itertools import zip_longest
+from typing import Optional, Union
 
-import numpy as np
-import torch
+import cloudpickle
 import gymnasium as gym
+import numpy as np
+import torch as th
+from gymnasium import spaces
 
-from typing import Optional
-from colorama import Fore, Style
+# Check if tensorboard is available for pytorch
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None  # type: ignore[misc, assignment]
 
-def load_config(config_path):
-    with open(config_path, 'r') as file:
-        return yaml.safe_load(file)
+from src.common.logger import Logger, configure
+from src.common.type_aliases import GymEnv, Schedule, TensorDict, TrainFreq, TrainFrequencyUnit
 
-def set_seed(seed, env: Optional[gym.Env] = None):
-    if env is not None:
-        env.seed(seed)
-        env.action_space.seed(seed)
 
-    os.environ["PYTHONHASHSEED"] = str(seed)
+def set_random_seed(seed: int, using_cuda: bool = False) -> None:
+    """
+    Seed the different random generators.
+
+    :param seed:
+    :param using_cuda:
+    """
+    # Seed python RNG
     random.seed(seed)
+    # Seed numpy RNG
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    # seed the RNG for all devices (both CPU and CUDA)
+    th.manual_seed(seed)
+
+    if using_cuda:
+        # Deterministic operations for CuDNN, it may impact performances
+        th.backends.cudnn.deterministic = True
+        th.backends.cudnn.benchmark = False
+
+
+# From stable baselines
+def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> float:
+    """
+    Computes fraction of variance that ypred explains about y.
+    Returns 1 - Var[y-ypred] / Var[y]
+
+    interpretation:
+        ev=0  =>  might as well have predicted zero
+        ev=1  =>  perfect prediction
+        ev<0  =>  worse than just predicting zero
+
+    :param y_pred: the prediction
+    :param y_true: the expected value
+    :return: explained variance of ypred and y
+    """
+    assert y_true.ndim == 1 and y_pred.ndim == 1
+    var_y = np.var(y_true)
+    return np.nan if var_y == 0 else float(1 - np.var(y_true - y_pred) / var_y)
+
+
+def update_learning_rate(optimizer: th.optim.Optimizer, learning_rate: float) -> None:
+    """
+    Update the learning rate for a given optimizer.
+    Useful when doing linear schedule.
+
+    :param optimizer: Pytorch optimizer
+    :param learning_rate: New learning rate value
+    """
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = learning_rate
+
+
+def get_schedule_fn(value_schedule: Union[Schedule, float]) -> Schedule:
+    """
+    Transform (if needed) learning rate and clip range (for PPO)
+    to callable.
+
+    :param value_schedule: Constant value of schedule function
+    :return: Schedule function (can return constant value)
+    """
+    # If the passed schedule is a float
+    # create a constant function
+    if isinstance(value_schedule, (float, int)):
+        # Cast to float to avoid errors
+        value_schedule = constant_fn(float(value_schedule))
+    else:
+        assert callable(value_schedule)
+    # Cast to float to avoid unpickling errors to enable weights_only=True, see GH#1900
+    # Some types are have odd behaviors when part of a Schedule, like numpy floats
+    return lambda progress_remaining: float(value_schedule(progress_remaining))
+
+
+def get_linear_fn(start: float, end: float, end_fraction: float) -> Schedule:
+    """
+    Create a function that interpolates linearly between start and end
+    between ``progress_remaining`` = 1 and ``progress_remaining`` = ``end_fraction``.
+    This is used in DQN for linearly annealing the exploration fraction
+    (epsilon for the epsilon-greedy strategy).
+
+    :params start: value to start with if ``progress_remaining`` = 1
+    :params end: value to end with if ``progress_remaining`` = 0
+    :params end_fraction: fraction of ``progress_remaining``
+        where end is reached e.g 0.1 then end is reached after 10%
+        of the complete training process.
+    :return: Linear schedule function.
+    """
+
+    def func(progress_remaining: float) -> float:
+        if (1 - progress_remaining) > end_fraction:
+            return end
+        else:
+            return start + (1 - progress_remaining) * (end - start) / end_fraction
+
+    return func
+
+
+def constant_fn(val: float) -> Schedule:
+    """
+    Create a function that returns a constant
+    It is useful for learning rate schedule (to avoid code duplication)
+
+    :param val: constant value
+    :return: Constant schedule function.
+    """
+
+    def func(_):
+        return val
+
+    return func
+
 
 def get_device(device: Union[th.device, str] = "auto") -> th.device:
     """
@@ -35,18 +142,14 @@ def get_device(device: Union[th.device, str] = "auto") -> th.device:
     For now, it supports only cpu and cuda.
     By default, it tries to use the gpu.
 
-    만약 여러 gpu가 세팅된 상태에서 특정 gpu를 사용하고 싶다면, device = f"cuda:{gpu_id}" 와 같이 사용
-
     :param device: One for 'auto', 'cuda', 'cpu'
     :return: Supported Pytorch device
-    
-    
     """
     # Cuda by default
     if device == "auto":
         device = "cuda"
     # Force conversion to th.device
-    device = torch.device(device)
+    device = th.device(device)
 
     # Cuda not available
     if device.type == th.device("cuda").type and not th.cuda.is_available():
@@ -54,106 +157,395 @@ def get_device(device: Union[th.device, str] = "auto") -> th.device:
 
     return device
 
-def create_directory(path):
-    if os.path.exists(path):
-        response = input(f"{Fore.RED}The directory '{path}' already exists. Do you want to delete it and create a new one? (y/n): {Style.RESET_ALL}")
-        if response.lower() == 'y':
-            shutil.rmtree(path)
-            os.makedirs(path)
-            print(f"The directory '{path}' has been deleted and recreated.")
+
+def get_latest_run_id(log_path: str = "", log_name: str = "") -> int:
+    """
+    Returns the latest run number for the given log name and log path,
+    by finding the greatest number in the directories.
+
+    :param log_path: Path to the log folder containing several runs.
+    :param log_name: Name of the experiment. Each run is stored
+        in a folder named ``log_name_1``, ``log_name_2``, ...
+    :return: latest run number
+    """
+    max_run_id = 0
+    for path in glob.glob(os.path.join(log_path, f"{glob.escape(log_name)}_[0-9]*")):
+        file_name = path.split(os.sep)[-1]
+        ext = file_name.split("_")[-1]
+        if log_name == "_".join(file_name.split("_")[:-1]) and ext.isdigit() and int(ext) > max_run_id:
+            max_run_id = int(ext)
+    return max_run_id
+
+
+def configure_logger(
+    verbose: int = 0,
+    tensorboard_log: Optional[str] = None,
+    tb_log_name: str = "",
+    reset_num_timesteps: bool = True,
+) -> Logger:
+    """
+    Configure the logger's outputs.
+
+    :param verbose: Verbosity level: 0 for no output, 1 for the standard output to be part of the logger outputs
+    :param tensorboard_log: the log location for tensorboard (if None, no logging)
+    :param tb_log_name: tensorboard log
+    :param reset_num_timesteps:  Whether the ``num_timesteps`` attribute is reset or not.
+        It allows to continue a previous learning curve (``reset_num_timesteps=False``)
+        or start from t=0 (``reset_num_timesteps=True``, the default).
+    :return: The logger object
+    """
+    save_path, format_strings = None, ["stdout"]
+
+    if tensorboard_log is not None and SummaryWriter is None:
+        raise ImportError("Trying to log data to tensorboard but tensorboard is not installed.")
+
+    if tensorboard_log is not None and SummaryWriter is not None:
+        latest_run_id = get_latest_run_id(tensorboard_log, tb_log_name)
+        if not reset_num_timesteps:
+            # Continue training in the same directory
+            latest_run_id -= 1
+        save_path = os.path.join(tensorboard_log, f"{tb_log_name}_{latest_run_id + 1}")
+        if verbose >= 1:
+            format_strings = ["stdout", "tensorboard"]
         else:
-            print("Operation cancelled. The directory was not modified.")
+            format_strings = ["tensorboard"]
+    elif verbose == 0:
+        format_strings = [""]
+    return configure(save_path, format_strings=format_strings)
+
+
+def check_for_correct_spaces(env: GymEnv, observation_space: spaces.Space, action_space: spaces.Space) -> None:
+    """
+    Checks that the environment has same spaces as provided ones. Used by BaseAlgorithm to check if
+    spaces match after loading the model with given env.
+    Checked parameters:
+    - observation_space
+    - action_space
+
+    :param env: Environment to check for valid spaces
+    :param observation_space: Observation space to check against
+    :param action_space: Action space to check against
+    """
+    if observation_space != env.observation_space:
+        raise ValueError(f"Observation spaces do not match: {observation_space} != {env.observation_space}")
+    if action_space != env.action_space:
+        raise ValueError(f"Action spaces do not match: {action_space} != {env.action_space}")
+
+
+def check_shape_equal(space1: spaces.Space, space2: spaces.Space) -> None:
+    """
+    If the spaces are Box, check that they have the same shape.
+
+    If the spaces are Dict, it recursively checks the subspaces.
+
+    :param space1: Space
+    :param space2: Other space
+    """
+    if isinstance(space1, spaces.Dict):
+        assert isinstance(space2, spaces.Dict), "spaces must be of the same type"
+        assert space1.spaces.keys() == space2.spaces.keys(), "spaces must have the same keys"
+        for key in space1.spaces.keys():
+            check_shape_equal(space1.spaces[key], space2.spaces[key])
+    elif isinstance(space1, spaces.Box):
+        assert space1.shape == space2.shape, "spaces must have the same shape"
+
+
+def is_vectorized_box_observation(observation: np.ndarray, observation_space: spaces.Box) -> bool:
+    """
+    For box observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+    if observation.shape == observation_space.shape:
+        return False
+    elif observation.shape[1:] == observation_space.shape:
+        return True
     else:
-        os.makedirs(path)
-        print(f"The directory '{path}' has been created.")
+        raise ValueError(
+            f"Error: Unexpected observation shape {observation.shape} for "
+            + f"Box environment, please use {observation_space.shape} "
+            + "or (n_env, {}) for the observation shape.".format(", ".join(map(str, observation_space.shape)))
+        )
 
-def remove_old_checkpoints(directory_path, prefix="model_best", extension=".pth"):
-    # 지정된 디렉토리 내에서 prefix로 시작하고 extension으로 끝나는 파일 찾기
-    pattern = os.path.join(directory_path, f"{prefix}*{extension}")
-    files_to_remove = glob.glob(pattern)
 
-    # 파일 삭제
-    for file_path in files_to_remove:
-        try:
-            os.remove(file_path)
-            print(f"Removed old checkpoint file: {file_path}")
-        except FileNotFoundError:
-            print(f"File not found, skipping removal: {file_path}")
-        except Exception as e:
-            print(f"Error removing file {file_path}: {e}")
-            raise
-
-def save_dict_to_json(data, filepath, readonly=False):
-    # 파일이 이미 존재하는지 확인
-    if os.path.exists(filepath):
-        # 사용자에게 덮어쓸지 여부를 묻기
-        overwrite = input(f"File '{filepath}' already exists. Do you want to overwrite it? (y/n): ")
-        if overwrite.lower() != 'y':
-            print("File not overwritten.")
-            return
-        
-    with open(filepath, 'w') as json_file:
-        json.dump(data, json_file, indent=4)
-
-    if readonly:
-        os.chmod(filepath, 0o444)
-    print(f"File '{filepath}' has been saved. Readonly:{readonly}\n")
-
-def get_attr_from_module(module_name, attr_name):
+def is_vectorized_discrete_observation(observation: Union[int, np.ndarray], observation_space: spaces.Discrete) -> bool:
     """
-    모듈에서 attr를 반환
-    """
-    # 모듈 동적 임포트
-    module = importlib.import_module(module_name)
-    # 모듈에서 변수 가져오기
-    variable = getattr(module, attr_name)
-    return variable
+    For discrete observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
 
-def change_file_extension(filepath, new_extension):
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
     """
-    경로에서 파일의 확장자 변경.
-    """
-    # 파일 경로와 확장자를 분리
-    base, _ = os.path.splitext(filepath)
-    # 새로운 확장자를 추가하여 새로운 파일 경로 생성
-    new_filepath = f"{base}.{new_extension.lstrip('.')}"
-    return new_filepath
+    if isinstance(observation, int) or observation.shape == ():  # A numpy array of a number, has shape empty tuple '()'
+        return False
+    elif len(observation.shape) == 1:
+        return True
+    else:
+        raise ValueError(
+            f"Error: Unexpected observation shape {observation.shape} for "
+            + "Discrete environment, please use () or (n_env,) for the observation shape."
+        )
 
-def make_config(obj, ignore):
-    """
-    인스턴스를 받아서 json과 호환되는 애트리뷰트를 dictionary 형식으로 반환
-    """
-    json_compatible_types = (str, int, float, bool, list, dict, type(None))
 
-    def is_json_compatible(value):
-        # 중첩된 객체가 있을 경우 재귀적으로 처리
-        if isinstance(value, json_compatible_types):
-            return True
+def is_vectorized_multidiscrete_observation(observation: np.ndarray, observation_space: spaces.MultiDiscrete) -> bool:
+    """
+    For multidiscrete observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+    if observation.shape == (len(observation_space.nvec),):
+        return False
+    elif len(observation.shape) == 2 and observation.shape[1] == len(observation_space.nvec):
+        return True
+    else:
+        raise ValueError(
+            f"Error: Unexpected observation shape {observation.shape} for MultiDiscrete "
+            + f"environment, please use ({len(observation_space.nvec)},) or "
+            + f"(n_env, {len(observation_space.nvec)}) for the observation shape."
+        )
+
+
+def is_vectorized_multibinary_observation(observation: np.ndarray, observation_space: spaces.MultiBinary) -> bool:
+    """
+    For multibinary observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+    if observation.shape == observation_space.shape:
+        return False
+    elif len(observation.shape) == len(observation_space.shape) + 1 and observation.shape[1:] == observation_space.shape:
+        return True
+    else:
+        raise ValueError(
+            f"Error: Unexpected observation shape {observation.shape} for MultiBinary "
+            + f"environment, please use {observation_space.shape} or "
+            + f"(n_env, {observation_space.n}) for the observation shape."
+        )
+
+
+def is_vectorized_dict_observation(observation: np.ndarray, observation_space: spaces.Dict) -> bool:
+    """
+    For dict observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+    # We first assume that all observations are not vectorized
+    all_non_vectorized = True
+    for key, subspace in observation_space.spaces.items():
+        # This fails when the observation is not vectorized
+        # or when it has the wrong shape
+        if observation[key].shape != subspace.shape:
+            all_non_vectorized = False
+            break
+
+    if all_non_vectorized:
         return False
 
-    return {key: value for key, value in obj.__dict__.items() if is_json_compatible(value) and key not in ignore}
+    all_vectorized = True
+    # Now we check that all observation are vectorized and have the correct shape
+    for key, subspace in observation_space.spaces.items():
+        if observation[key].shape[1:] != subspace.shape:
+            all_vectorized = False
+            break
 
-def save_dict_to_csv(outputs:dict, filepath):
-    
-    # CSV 파일이 있는지 확인
-    file_exists = os.path.isfile(filepath)
-    
-    # CSV 파일에 데이터 추가
-    with open(filepath, 'a', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=outputs.keys())
-        
-        # 파일이 없으면 컬럼 헤더 추가
-        if not file_exists:
-            writer.writeheader()
-        
-        # 새로운 데이터 추가
-        writer.writerow(outputs)
+    if all_vectorized:
+        return True
+    else:
+        # Retrieve error message
+        error_msg = ""
+        try:
+            is_vectorized_observation(observation[key], observation_space.spaces[key])
+        except ValueError as e:
+            error_msg = f"{e}"
+        raise ValueError(
+            f"There seems to be a mix of vectorized and non-vectorized observations. "
+            f"Unexpected observation shape {observation[key].shape} for key {key} "
+            f"of type {observation_space.spaces[key]}. {error_msg}"
+        )
 
-def find_files(base_dir, pattern, file_extension):
-    matched_files = []
-    for root, dirs, files in os.walk(base_dir):
-        for file in files:
-            if pattern in file and file.endswith(file_extension):
-                matched_files.append(os.path.join(root, file))
-    
-    return matched_files
+
+def is_vectorized_observation(observation: Union[int, np.ndarray], observation_space: spaces.Space) -> bool:
+    """
+    For every observation type, detects and validates the shape,
+    then returns whether or not the observation is vectorized.
+
+    :param observation: the input observation to validate
+    :param observation_space: the observation space
+    :return: whether the given observation is vectorized or not
+    """
+
+    is_vec_obs_func_dict = {
+        spaces.Box: is_vectorized_box_observation,
+        spaces.Discrete: is_vectorized_discrete_observation,
+        spaces.MultiDiscrete: is_vectorized_multidiscrete_observation,
+        spaces.MultiBinary: is_vectorized_multibinary_observation,
+        spaces.Dict: is_vectorized_dict_observation,
+    }
+
+    for space_type, is_vec_obs_func in is_vec_obs_func_dict.items():
+        if isinstance(observation_space, space_type):
+            return is_vec_obs_func(observation, observation_space)  # type: ignore[operator]
+    else:
+        # for-else happens if no break is called
+        raise ValueError(f"Error: Cannot determine if the observation is vectorized with the space type {observation_space}.")
+
+
+def safe_mean(arr: Union[np.ndarray, list, deque]) -> float:
+    """
+    Compute the mean of an array if there is at least one element.
+    For empty array, return NaN. It is used for logging only.
+
+    :param arr: Numpy array or list of values
+    :return:
+    """
+    return np.nan if len(arr) == 0 else float(np.mean(arr))  # type: ignore[arg-type]
+
+
+def get_parameters_by_name(model: th.nn.Module, included_names: Iterable[str]) -> list[th.Tensor]:
+    """
+    Extract parameters from the state dict of ``model``
+    if the name contains one of the strings in ``included_names``.
+
+    :param model: the model where the parameters come from.
+    :param included_names: substrings of names to include.
+    :return: List of parameters values (Pytorch tensors)
+        that matches the queried names.
+    """
+    return [param for name, param in model.state_dict().items() if any([key in name for key in included_names])]
+
+
+def zip_strict(*iterables: Iterable) -> Iterable:
+    r"""
+    ``zip()`` function but enforces that iterables are of equal length.
+    Raises ``ValueError`` if iterables not of equal length.
+    Code inspired by Stackoverflow answer for question #32954486.
+
+    :param \*iterables: iterables to ``zip()``
+    """
+    # As in Stackoverflow #32954486, use
+    # new object for "empty" in case we have
+    # Nones in iterable.
+    sentinel = object()
+    for combo in zip_longest(*iterables, fillvalue=sentinel):
+        if sentinel in combo:
+            raise ValueError("Iterables have different lengths")
+        yield combo
+
+
+def polyak_update(
+    params: Iterable[th.Tensor],
+    target_params: Iterable[th.Tensor],
+    tau: float,
+) -> None:
+    """
+    Perform a Polyak average update on ``target_params`` using ``params``:
+    target parameters are slowly updated towards the main parameters.
+    ``tau``, the soft update coefficient controls the interpolation:
+    ``tau=1`` corresponds to copying the parameters to the target ones whereas nothing happens when ``tau=0``.
+    The Polyak update is done in place, with ``no_grad``, and therefore does not create intermediate tensors,
+    or a computation graph, reducing memory cost and improving performance.  We scale the target params
+    by ``1-tau`` (in-place), add the new weights, scaled by ``tau`` and store the result of the sum in the target
+    params (in place).
+    See https://github.com/DLR-RM/stable-baselines3/issues/93
+
+    :param params: parameters to use to update the target params
+    :param target_params: parameters to update
+    :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
+    """
+    with th.no_grad():
+        # zip does not raise an exception if length of parameters does not match.
+        for param, target_param in zip_strict(params, target_params):
+            target_param.data.mul_(1 - tau)
+            th.add(target_param.data, param.data, alpha=tau, out=target_param.data)
+
+
+def obs_as_tensor(obs: Union[np.ndarray, dict[str, np.ndarray]], device: th.device) -> Union[th.Tensor, TensorDict]:
+    """
+    Moves the observation to the given device.
+
+    :param obs:
+    :param device: PyTorch device
+    :return: PyTorch tensor of the observation on a desired device.
+    """
+    if isinstance(obs, np.ndarray):
+        return th.as_tensor(obs, device=device)
+    elif isinstance(obs, dict):
+        return {key: th.as_tensor(_obs, device=device) for (key, _obs) in obs.items()}
+    else:
+        raise Exception(f"Unrecognized type of observation {type(obs)}")
+
+
+def should_collect_more_steps(
+    train_freq: TrainFreq,
+    num_collected_steps: int,
+    num_collected_episodes: int,
+) -> bool:
+    """
+    Helper used in ``collect_rollouts()`` of off-policy algorithms
+    to determine the termination condition.
+
+    :param train_freq: How much experience should be collected before updating the policy.
+    :param num_collected_steps: The number of already collected steps.
+    :param num_collected_episodes: The number of already collected episodes.
+    :return: Whether to continue or not collecting experience
+        by doing rollouts of the current policy.
+    """
+    if train_freq.unit == TrainFrequencyUnit.STEP:
+        return num_collected_steps < train_freq.frequency
+
+    elif train_freq.unit == TrainFrequencyUnit.EPISODE:
+        return num_collected_episodes < train_freq.frequency
+
+    else:
+        raise ValueError(
+            "The unit of the `train_freq` must be either TrainFrequencyUnit.STEP "
+            f"or TrainFrequencyUnit.EPISODE not '{train_freq.unit}'!"
+        )
+
+
+def get_system_info(print_info: bool = True) -> tuple[dict[str, str], str]:
+    """
+    Retrieve system and python env info for the current system.
+
+    :param print_info: Whether to print or not those infos
+    :return: Dictionary summing up the version for each relevant package
+        and a formatted string.
+    """
+    env_info = {
+        # In OS, a regex is used to add a space between a "#" and a number to avoid
+        # wrongly linking to another issue on GitHub. Example: turn "#42" to "# 42".
+        "OS": re.sub(r"#(\d)", r"# \1", f"{platform.platform()} {platform.version()}"),
+        "Python": platform.python_version(),
+        "Stable-Baselines3": sb3.__version__,
+        "PyTorch": th.__version__,
+        "GPU Enabled": str(th.cuda.is_available()),
+        "Numpy": np.__version__,
+        "Cloudpickle": cloudpickle.__version__,
+        "Gymnasium": gym.__version__,
+    }
+    try:
+        import gym as openai_gym
+
+        env_info.update({"OpenAI Gym": openai_gym.__version__})
+    except ImportError:
+        pass
+
+    env_info_str = ""
+    for key, value in env_info.items():
+        env_info_str += f"- {key}: {value}\n"
+    if print_info:
+        print(env_info_str)
+    return env_info, env_info_str

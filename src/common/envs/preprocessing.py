@@ -1,3 +1,53 @@
+def preprocess_obs(
+    obs: Union[th.Tensor, dict[str, th.Tensor]],
+    observation_space: spaces.Space,
+    normalize_images: bool = True,
+) -> Union[th.Tensor, dict[str, th.Tensor]]:
+    """
+    Preprocess observation to be to a neural network.
+    For images, it normalizes the values by dividing them by 255 (to have values in [0, 1])
+    For discrete observations, it create a one hot vector.
+
+    :param obs: Observation
+    :param observation_space:
+    :param normalize_images: Whether to normalize images or not
+        (True by default)
+    :return:
+    """
+    if isinstance(observation_space, spaces.Dict):
+        # Do not modify by reference the original observation
+        assert isinstance(obs, dict), f"Expected dict, got {type(obs)}"
+        preprocessed_obs = {}
+        for key, _obs in obs.items():
+            preprocessed_obs[key] = preprocess_obs(_obs, observation_space[key], normalize_images=normalize_images)
+        return preprocessed_obs  # type: ignore[return-value]
+
+    assert isinstance(obs, th.Tensor), f"Expecting a torch Tensor, but got {type(obs)}"
+
+    if isinstance(observation_space, spaces.Box):
+        if normalize_images and is_image_space(observation_space):
+            return obs.float() / 255.0
+        return obs.float()
+
+    elif isinstance(observation_space, spaces.Discrete):
+        # One hot encoding and convert to float to avoid errors
+        return F.one_hot(obs.long(), num_classes=int(observation_space.n)).float()
+
+    elif isinstance(observation_space, spaces.MultiDiscrete):
+        # Tensor concatenation of one hot encodings of each Categorical sub-space
+        return th.cat(
+            [
+                F.one_hot(obs_.long(), num_classes=int(observation_space.nvec[idx])).float()
+                for idx, obs_ in enumerate(th.split(obs.long(), 1, dim=1))
+            ],
+            dim=-1,
+        ).view(obs.shape[0], sum(observation_space.nvec))
+
+    elif isinstance(observation_space, spaces.MultiBinary):
+        return obs.float()
+    else:
+        raise NotImplementedError(f"Preprocessing not implemented for {observation_space}")
+
 def get_obs_shape(
     observation_space: spaces.Space,
 ) -> Union[tuple[int, ...], dict[str, tuple[int, ...]]]:
