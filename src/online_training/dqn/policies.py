@@ -126,7 +126,7 @@ class DQNPolicy(BasePolicy):
         lr_schedule: Schedule,
         net_arch: Optional[list[int]] = None,
         activation_fn: type[nn.Module] = nn.ReLU,
-        features_extractor_class: type[BaseFeaturesExtractor] = FlattenExtractor, # ㅇㄷㄹㅁ
+        features_extractor_class: type[BaseFeaturesExtractor] = FlattenExtractor,  
         features_extractor_kwargs: Optional[dict[str, Any]] = None,
         normalize_images: bool = True,
         optimizer_class: type[th.optim.Optimizer] = th.optim.Adam,

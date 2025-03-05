@@ -20,6 +20,7 @@ try:
 except ImportError:
     SummaryWriter = None  # type: ignore[misc, assignment]
 
+import src as ri
 from src.common.logger import Logger, configure
 from src.common.type_aliases import GymEnv, Schedule, TensorDict, TrainFreq, TrainFrequencyUnit
 
@@ -112,6 +113,9 @@ def get_linear_fn(start: float, end: float, end_fraction: float) -> Schedule:
     """
 
     def func(progress_remaining: float) -> float:
+        """
+        progress_remaining: 0 ~ 1 this is percentage of remaining steps
+        """
         if (1 - progress_remaining) > end_fraction:
             return end
         else:
@@ -529,7 +533,7 @@ def get_system_info(print_info: bool = True) -> tuple[dict[str, str], str]:
         # wrongly linking to another issue on GitHub. Example: turn "#42" to "# 42".
         "OS": re.sub(r"#(\d)", r"# \1", f"{platform.platform()} {platform.version()}"),
         "Python": platform.python_version(),
-        "Stable-Baselines3": sb3.__version__,
+        "ri": ri.__version__,
         "PyTorch": th.__version__,
         "GPU Enabled": str(th.cuda.is_available()),
         "Numpy": np.__version__,

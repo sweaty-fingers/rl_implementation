@@ -272,8 +272,7 @@ class CombinedExtractor(BaseFeaturesExtractor):
     is fed through a separate submodule (CNN or MLP, depending on input shape),
     the output features are concatenated and fed through additional MLP network ("combined").
 
-    ?? 어느 상황에 쓰는 건지??
-    여러개의 env를 사용할 떄?? obs를 사용할 떄?? 
+    ?? 어느 상황에 쓰는 건지?? => Dict observation을 사용할 때, key 별로 feature extractor를 다르게 사용.
 
     :param observation_space:
     :param cnn_output_dim: Number of features to output from each CNN submodule(s). Defaults to

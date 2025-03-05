@@ -6,12 +6,12 @@ import torch as th
 from gymnasium import spaces
 from torch.nn import functional as F
 
-from stable_baselines3.common.buffers import ReplayBuffer
-from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
-from stable_baselines3.common.policies import BasePolicy
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
-from stable_baselines3.common.utils import get_linear_fn, get_parameters_by_name, polyak_update
-from stable_baselines3.dqn.policies import CnnPolicy, DQNPolicy, MlpPolicy, MultiInputPolicy, QNetwork
+from src.common.buffers import ReplayBuffer
+from src.common.off_policy_algorithm import OffPolicyAlgorithm
+from src.common.policies import BasePolicy
+from src.common.type_aliases import GymEnv, MaybeCallback, Schedule
+from src.common.utils import get_linear_fn, get_parameters_by_name, polyak_update
+from src.dqn.policies import CnnPolicy, DQNPolicy, MlpPolicy, MultiInputPolicy, QNetwork
 
 SelfDQN = TypeVar("SelfDQN", bound="DQN")
 
@@ -58,8 +58,8 @@ class DQN(OffPolicyAlgorithm):
 
     # Exploration rate
     :param exploration_fraction: fraction of entire training period over which the exploration rate is reduced
-    :param exploration_initial_eps: initial value of random action probability
-    :param exploration_final_eps: final value of random action probability
+    :param exploration_initial_eps: initial value of random action probability # At first phase, 100%(default) random action is used
+    :param exploration_final_eps: final value of random action probability # At last phase, 5%(default) random action is used
 
     # Gradient clipping
     :param max_grad_norm: The maximum value for the gradient clipping
@@ -83,6 +83,9 @@ class DQN(OffPolicyAlgorithm):
         "MultiInputPolicy": MultiInputPolicy,
     }
     # Linear schedule will be defined in `_setup_model()`
+    # class attributes로 type hint만 적어두면, 실제로 값을 할당하기 전까지 오류가 발생하지 않음.
+    # 클래스가 해당 attribute를 가지고 있는 것을 알려주는 역할을 함.
+
     exploration_schedule: Schedule
     q_net: QNetwork
     q_net_target: QNetwork
@@ -147,7 +150,7 @@ class DQN(OffPolicyAlgorithm):
         self.exploration_fraction = exploration_fraction
         self.target_update_interval = target_update_interval
         # For updating the target network with multiple envs:
-        self._n_calls = 0
+        self._n_calls = 0 # Check if this is saved
         self.max_grad_norm = max_grad_norm
         # "epsilon" for the epsilon-greedy exploration
         self.exploration_rate = 0.0
@@ -159,7 +162,7 @@ class DQN(OffPolicyAlgorithm):
         super()._setup_model()
         self._create_aliases()
         # Copy running stats, see GH issue #996
-        self.batch_norm_stats = get_parameters_by_name(self.q_net, ["running_"])
+        self.batch_norm_stats = get_parameters_by_name(self.q_net, ["running_"]) # in torch, the term is "running_mean" and "running_var" is typically associated with batch norm
         self.batch_norm_stats_target = get_parameters_by_name(self.q_net_target, ["running_"])
         self.exploration_schedule = get_linear_fn(
             self.exploration_initial_eps,
@@ -184,6 +187,8 @@ class DQN(OffPolicyAlgorithm):
         """
         Update the exploration rate and target network if needed.
         This method is called in ``collect_rollouts()`` after each step in the environment.
+        
+        the number of steps of interacting with environment is important not the number of steps of updating the model
         """
         self._n_calls += 1
         # Account for multiple environments
@@ -192,6 +197,7 @@ class DQN(OffPolicyAlgorithm):
             polyak_update(self.q_net.parameters(), self.q_net_target.parameters(), self.tau)
             # Copy running stats, see GH issue #996
             polyak_update(self.batch_norm_stats, self.batch_norm_stats_target, 1.0)
+            # “We should also update the batch normalization statistics of the target network.”
 
         self.exploration_rate = self.exploration_schedule(self._current_progress_remaining)
         self.logger.record("rollout/exploration_rate", self.exploration_rate)
@@ -203,7 +209,7 @@ class DQN(OffPolicyAlgorithm):
         self._update_learning_rate(self.policy.optimizer)
 
         losses = []
-        for _ in range(gradient_steps):
+        for _ in range(gradient_steps): # gradient_steps is the number of gradient steps to do after each rollout. it's not step number of td error
             # Sample replay buffer
             replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)  # type: ignore[union-attr]
 
@@ -260,7 +266,7 @@ class DQN(OffPolicyAlgorithm):
         if not deterministic and np.random.rand() < self.exploration_rate:
             if self.policy.is_vectorized_observation(observation):
                 if isinstance(observation, dict):
-                    n_batch = observation[next(iter(observation.keys()))].shape[0]
+                    n_batch = observation[next(iter(observation.keys()))].shape[0] # just get one of the keys and get the batch size
                 else:
                     n_batch = observation.shape[0]
                 action = np.array([self.action_space.sample() for _ in range(n_batch)])

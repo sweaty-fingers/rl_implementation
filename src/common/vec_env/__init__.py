@@ -3,6 +3,15 @@ from typing import Optional, TypeVar
 
 from src.common.vec_env.base_vec_env import CloudpickleWrapper, VecEnv, VecEnvWrapper
 from src.common.vec_env.dummy_vec_env import DummyVecEnv
+from src.common.vec_env.stacked_observations import StackedObservations
+from src.common.vec_env.subproc_vec_env import SubprocVecEnv
+from src.common.vec_env.vec_check_nan import VecCheckNan
+from src.common.vec_env.vec_extract_dict_obs import VecExtractDictObs
+from src.common.vec_env.vec_frame_stack import VecFrameStack
+from src.common.vec_env.vec_monitor import VecMonitor
+from src.common.vec_env.vec_normalize import VecNormalize
+from src.common.vec_env.vec_transpose import VecTransposeImage
+from src.common.vec_env.vec_video_recorder import VecVideoRecorder
 
 VecEnvWrapperT = TypeVar("VecEnvWrapperT", bound=VecEnvWrapper)
 

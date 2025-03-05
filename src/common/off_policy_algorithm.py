@@ -19,7 +19,7 @@ from src.common.save_util import load_from_pkl, save_to_pkl
 from src.common.type_aliases import GymEnv, MaybeCallback, RolloutReturn, Schedule, TrainFreq, TrainFrequencyUnit
 from src.common.utils import safe_mean, should_collect_more_steps
 from src.common.vec_env import VecEnv
-from src.common.her.her_replay_buffer import HerReplayBuffer
+from src.online_training.her.her_replay_buffer import HerReplayBuffer
 
 SelfOffPolicyAlgorithm = TypeVar("SelfOffPolicyAlgorithm", bound="OffPolicyAlgorithm")
 
@@ -564,7 +564,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
             # Give access to local variables
             callback.update_locals(locals())
-            # Only stop training if return value is False, not when it is None.
+            # Only stop training if return value is False, not when it is None. # It's a special case for callback.on_step() because it returns None when the episode is done.
             if not callback.on_step():
                 return RolloutReturn(num_collected_steps * env.num_envs, num_collected_episodes, continue_training=False)
 

@@ -37,6 +37,7 @@ RUN apt-get update \
     liblzma-dev \
     lsof\
     tree\
+    xvfb\
     && sed -i 's/# set linenumbers/set linenumbers/g' /etc/nanorc \
     && apt clean \
     && rm -rf /var/lib/apt/lists/*

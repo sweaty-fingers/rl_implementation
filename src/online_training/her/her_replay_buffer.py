@@ -6,10 +6,10 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 
-from stable_baselines3.common.buffers import DictReplayBuffer
-from stable_baselines3.common.type_aliases import DictReplayBufferSamples
-from stable_baselines3.common.vec_env import VecEnv, VecNormalize
-from stable_baselines3.her.goal_selection_strategy import KEY_TO_GOAL_STRATEGY, GoalSelectionStrategy
+from src.common.buffers import DictReplayBuffer
+from src.common.type_aliases import DictReplayBufferSamples
+from src.common.vec_env import VecEnv, VecNormalize
+from src.online_training.her.goal_selection_strategy import KEY_TO_GOAL_STRATEGY, GoalSelectionStrategy
 
 
 class HerReplayBuffer(DictReplayBuffer):

@@ -14,17 +14,17 @@ import numpy as np
 import torch as th
 from gymnasium import spaces
 
-from stable_baselines3.common import utils
-from stable_baselines3.common.callbacks import BaseCallback, CallbackList, ConvertCallback, ProgressBarCallback
-from stable_baselines3.common.env_util import is_wrapped
-from stable_baselines3.common.logger import Logger
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.noise import ActionNoise
-from stable_baselines3.common.policies import BasePolicy
-from stable_baselines3.common.preprocessing import check_for_nested_spaces, is_image_space, is_image_space_channels_first
-from stable_baselines3.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
-from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule, TensorDict
-from stable_baselines3.common.utils import (
+from src.common import utils
+from src.common.callbacks import BaseCallback, CallbackList, ConvertCallback, ProgressBarCallback
+from src.common.env_util import is_wrapped
+from src.common.logger import Logger
+from src.common.monitor import Monitor
+from src.common.noise import ActionNoise
+from src.common.policies import BasePolicy
+from src.common.preprocessing import check_for_nested_spaces, is_image_space, is_image_space_channels_first
+from src.common.save_util import load_from_zip_file, recursive_getattr, recursive_setattr, save_to_zip_file
+from src.common.type_aliases import GymEnv, MaybeCallback, Schedule, TensorDict
+from src.common.utils import (
     check_for_correct_spaces,
     get_device,
     get_schedule_fn,
@@ -32,7 +32,7 @@ from stable_baselines3.common.utils import (
     set_random_seed,
     update_learning_rate,
 )
-from stable_baselines3.common.vec_env import (
+from src.common.vec_env import (
     DummyVecEnv,
     VecEnv,
     VecNormalize,
@@ -40,7 +40,7 @@ from stable_baselines3.common.vec_env import (
     is_vecenv_wrapped,
     unwrap_vec_normalize,
 )
-from stable_baselines3.common.vec_env.patch_gym import _convert_space, _patch_env
+from src.common.vec_env.patch_gym import _convert_space, _patch_env
 
 SelfBaseAlgorithm = TypeVar("SelfBaseAlgorithm", bound="BaseAlgorithm")
 
@@ -294,7 +294,7 @@ class BaseAlgorithm(ABC):
         # Log the current learning rate
         self.logger.record("train/learning_rate", self.lr_schedule(self._current_progress_remaining))
 
-        if not isinstance(optimizers, list):
+        if not isinstance(optimizers, list): # optimizers가 list가 아니면 list로 변환 optimizer가 여러개일 경우를 대바
             optimizers = [optimizers]
         for optimizer in optimizers:
             update_learning_rate(optimizer, self.lr_schedule(self._current_progress_remaining))
@@ -452,7 +452,7 @@ class BaseAlgorithm(ABC):
             maybe_ep_info = info.get("episode")
             maybe_is_success = info.get("is_success")
             if maybe_ep_info is not None:
-                self.ep_info_buffer.extend([maybe_ep_info])
+                self.ep_info_buffer.extend([maybe_ep_info]) # length of ep_info_buffer is not changed because of extend() method becase self.ep_info_buffer is deque 
             if maybe_is_success is not None and dones[idx]:
                 self.ep_success_buffer.append(maybe_is_success)
 

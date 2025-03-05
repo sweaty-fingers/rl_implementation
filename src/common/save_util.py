@@ -17,7 +17,7 @@ from typing import Any, Optional, Union
 import cloudpickle
 import torch as th
 
-from src import __version__
+import src as ri
 from src.common.type_aliases import TensorDict
 from src.common.utils import get_device, get_system_info
 
@@ -317,7 +317,7 @@ def save_to_zip_file(
         serialized_data = data_to_json(data)
 
     # Create a zip-archive and write our objects there.
-    with zipfile.ZipFile(file, mode="w") as ar.stchive:
+    with zipfile.ZipFile(file, mode="w") as archive:
         # Do not try to save "None" elements
         if data is not None:
             archive.writestr("data", serialized_data)
@@ -330,7 +330,7 @@ def save_to_zip_file(
                     th.save(dict_, param_file)
         # Save metadata: library version when file was saved
         # 나중에 import sb3 와 같이 custom 코드를 임포트 할 수 있게 되면 사용
-        archive.writestr("_src_version", __version__)
+        archive.writestr("_src_version", ri.__version__)
         # Save system info about the current python env
         archive.writestr("system_info.txt", get_system_info(print_info=False)[1])
 
